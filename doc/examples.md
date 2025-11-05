@@ -1,6 +1,6 @@
 # neorg-auto-summary Examples
 
-This directory contains example configurations and usage patterns for the neorg-auto-summary module.
+This document contains example configurations and usage patterns for the neorg-auto-summary module.
 
 ## Basic Configuration
 
