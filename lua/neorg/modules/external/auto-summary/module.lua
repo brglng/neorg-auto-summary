@@ -14,6 +14,7 @@ module.setup = function()
     return {
         success = true,
         requires = {
+            "core.dirman",
             "core.summary"
         },
     }
@@ -28,6 +29,20 @@ module.load = function()
             }
         })
     end)
+    if module.config.public.autocmd then
+        vim.api.nvim_create_autocmd("BufWritePost", {
+            pattern = "*.norg",
+            callback = function(e)
+                local dirman = module.required["core.dirman"]
+                local ws_root = dirman.get_current_workspace()[2]
+                local filename = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(e.file)))
+                local summary_name = vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. module.config.public.name))
+                if filename ~= summary_name then
+                    module.public.auto_summary()
+                end
+            end
+        })
+    end
 end
 
 module.config.public = {
@@ -47,6 +62,10 @@ module.public = {
         end
 
         local ws_root = dirman.get_current_workspace()[2]
+        local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_root .. "/" .. module.config.public.name)))
+
+        utils.notify("Generating summary at " .. summary_path .. "...")
+
         local generated = modules.get_module_config("core.summary").strategy(
             dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
             ws_root,
@@ -54,31 +73,25 @@ module.public = {
             {}
         )
 
-        local generated_str = vim.fn.join(generated, "\n") .. "\n"
-        vim.uv.fs_open(
-            ws_root .. "/" .. module.config.public.name,
-            "w",
-            tonumber("644", 8),
-            function(err, fd)
-                if not err and fd then
-                    vim.uv.fs_write(
-                        fd,
-                        generated_str,
-                        -1,
-                        function(err)
-                            if err then
-                                utils.notify("Error writing summary file: " .. err, vim.log.levels.ERROR)
-                            else
-                                utils.notify("Auto-summary generated at " .. module.config.public.name)
-                            end
-                            vim.uv.fs_close(fd)
-                        end
-                    )
-                else
-                    utils.notify("Error opening summary file: " .. err, vim.log.levels.ERROR)
-                end
+        local buf = nil
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+            local buf_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(b))))
+            if buf_path == summary_path then
+                buf = b
+                break
             end
-        )
+        end
+
+        if buf then
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, generated)
+            vim.api.nvim_buf_call(buf, function()
+                vim.cmd("write")
+            end)
+        else
+            vim.fn.writefile(generated, summary_path)
+        end
+
+        utils.notify("Summary generated at " .. summary_path)
     end,
 }
 
@@ -87,15 +100,28 @@ module.private = {
 }
 
 module.on_event = function(event)
-    if event.split_type[2] == "auto-summary.summarize" then
-        module.public.auto_summary()
-    end
+    vim.schedule(function()
+        if event.type == "core.neorgcmd.events.auto-summary.summarize" then
+            module.public.auto_summary()
+        elseif (
+            event.type == "core.dirman.events.workspace_changed" or
+            event.type == "core.dirman.events.workspace_added" or
+            event.type == "core.dirman.events.file_created"
+        ) and module.config.public.autocmd then
+            module.public.auto_summary()
+        end
+    end)
 end
 
 module.events.subscribed = {
     ["core.neorgcmd"] = {
         ["auto-summary.summarize"] = true,
     },
+    ["core.dirman"] = {
+        ["workspace_changed"] = true,
+        ["workspace_added"] = true,
+        ["file_created"] = true,
+    }
 }
 
 return module
