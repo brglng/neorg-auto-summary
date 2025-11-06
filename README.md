@@ -14,38 +14,19 @@ Add the following to your Neorg plugin configuration:
     dependencies = {
         "brglng/neorg-auto-summary",
     },
-    config = function()
-        require("neorg").setup({
-            load = {
-                ["core.defaults"] = {},
-                ["core.summary"] = {}, -- Required for auto-summary
-                ["external.auto-summary"] = {
-                    -- Add your configuration here
-                    -- config = {
-                    --     summary_length = 100,
-                    --     auto_update = true,
-                    -- }
-                },
+    opts = {
+        load = {
+            ["core.defaults"] = {},
+            ["core.summary"] = {}, -- Required for auto-summary
+            ["external.auto-summary"] = {
+                config = {
+                    name = "index.norg", -- Name of the summary file
+                }
             },
-        })
+        },
+    }
     end,
 }
-```
-
-## Configuration
-
-The module can be configured through Neorg's setup function:
-
-```lua
-require("neorg").setup({
-    load = {
-        ["external.auto-summary"] = {
-            config = {
-                name = "index.norg", -- Name of the summary file
-            }
-        },
-    },
-})
 ```
 
 ## Usage

@@ -54,7 +54,7 @@ module.public = {
             {}
         )
 
-        generated = "* Index\n" .. vim.fn.join(generated, "\n") .. "\n"
+        local generated_str = vim.fn.join(generated, "\n") .. "\n"
         vim.uv.fs_open(
             ws_root .. "/" .. module.config.public.name,
             "w",
@@ -63,7 +63,7 @@ module.public = {
                 if not err and fd then
                     vim.uv.fs_write(
                         fd,
-                        generated,
+                        generated_str,
                         -1,
                         function(err)
                             if err then
