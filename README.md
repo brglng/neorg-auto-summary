@@ -21,6 +21,7 @@ Add the following to your Neorg plugin configuration:
             ["external.auto-summary"] = {
                 config = {
                     name = "index.norg", -- Name of the summary file
+                    autocmd = false      -- Whether to create an autocommand to update the summary on save
                 }
             },
         },
