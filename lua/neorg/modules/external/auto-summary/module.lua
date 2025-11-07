@@ -64,8 +64,6 @@ module.public = {
         local ws_root = dirman.get_current_workspace()[2]
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_root .. "/" .. module.config.public.name)))
 
-        utils.notify("Generating summary at " .. summary_path .. "...")
-
         local generated = modules.get_module_config("core.summary").strategy(
             dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
             ws_root,
@@ -82,14 +80,17 @@ module.public = {
             end
         end
 
-        if buf then
-            vim.api.nvim_buf_set_lines(buf, 0, -1, false, generated)
+        if not buf then
+            buf = vim.api.nvim_create_buf(true, false)
             vim.api.nvim_buf_call(buf, function()
-                vim.cmd("write")
+                vim.cmd("edit " .. summary_path)
             end)
-        else
-            vim.fn.writefile(generated, summary_path)
         end
+
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, generated)
+        vim.api.nvim_buf_call(buf, function()
+            vim.cmd("write")
+        end)
 
         utils.notify("Summary generated at " .. summary_path)
     end,
