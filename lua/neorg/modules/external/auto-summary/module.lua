@@ -15,6 +15,8 @@ module.setup = function()
         success = true,
         requires = {
             "core.dirman",
+            "core.esupports.metagen",
+            "core.integrations.treesitter",
             "core.summary"
         },
     }
@@ -53,8 +55,9 @@ module.config.public = {
 ---@class external.auto-summary
 module.public = {
     auto_summary = function()
-        local summary = module.required["core.summary"]
         local dirman = modules.get_module("core.dirman")
+        local summary = module.required["core.summary"]
+        local ts = module.required["core.integrations.treesitter"]
 
         if not dirman then
             utils.notify("`core.dirman` is not loaded! It is required to generate summaries")
@@ -87,12 +90,52 @@ module.public = {
             end)
         end
 
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, generated)
-        vim.api.nvim_buf_call(buf, function()
-            vim.cmd("write")
-        end)
+        local metadata = nil ---@type string[]?
 
-        utils.notify("Summary generated at " .. summary_path)
+        local query = utils.ts_parse_query(
+            "norg",
+            [[
+                (ranged_verbatim_tag
+                    (tag_name) @name
+                    (#eq? @name "document.meta")
+                ) @meta
+            ]]
+        )
+
+        local root = ts.get_document_root(buf)
+
+        if root then
+            local _, found = query:iter_matches(root, buf)()
+            if found then
+                local metadata_node = nil
+                for id, node in pairs(found) do
+                    local name = query.captures[id]
+                    -- node is a list in nvim 0.11+
+                    if vim.islist(node) then
+                        node = node[1]
+                    end
+                    if name == "meta" then
+                        local start_row, _, start_col, end_row, _, end_col = node:range(true)
+                        metadata = vim.api.nvim_buf_get_text(buf, start_row, start_col, end_row, end_col, {})
+                        break
+                    end
+                end
+            end
+        end
+
+        if metadata then
+            metadata = vim.list_extend(metadata, {""})
+            generated = vim.list_extend(metadata, generated)
+        end
+
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, generated)
+
+        vim.schedule(function()
+            vim.api.nvim_buf_call(buf, function()
+                vim.cmd("update")
+            end)
+            utils.notify("Summary generated at " .. summary_path)
+        end)
     end,
 }
 
@@ -101,27 +144,16 @@ module.private = {
 }
 
 module.on_event = function(event)
-    vim.schedule(function()
-        if event.type == "core.neorgcmd.events.auto-summary.summarize" then
+    if event.type == "core.neorgcmd.events.auto-summary.summarize" then
+        vim.schedule(function()
             module.public.auto_summary()
-        elseif (
-            event.type == "core.dirman.events.workspace_changed" or
-            event.type == "core.dirman.events.workspace_added" or
-            event.type == "core.dirman.events.file_created"
-        ) and module.config.public.autocmd then
-            module.public.auto_summary()
-        end
-    end)
+        end)
+    end
 end
 
 module.events.subscribed = {
     ["core.neorgcmd"] = {
         ["auto-summary.summarize"] = true,
-    },
-    ["core.dirman"] = {
-        ["workspace_changed"] = true,
-        ["workspace_added"] = true,
-        ["file_created"] = true,
     }
 }
 
