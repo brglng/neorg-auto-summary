@@ -107,7 +107,6 @@ module.public = {
         if root then
             local _, found = query:iter_matches(root, buf)()
             if found then
-                local metadata_node = nil
                 for id, node in pairs(found) do
                     local name = query.captures[id]
                     -- node is a list in nvim 0.11+
