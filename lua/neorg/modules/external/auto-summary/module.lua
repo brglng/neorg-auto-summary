@@ -90,6 +90,7 @@ module.public = {
             buf = vim.api.nvim_create_buf(true, false)
             vim.api.nvim_buf_call(buf, function()
                 vim.cmd("edit " .. summary_path)
+                vim.cmd("set filetype=norg")
             end)
         end
 
