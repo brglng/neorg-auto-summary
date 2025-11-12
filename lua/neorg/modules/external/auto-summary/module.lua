@@ -67,11 +67,14 @@ module.public = {
         local ws_root = dirman.get_current_workspace()[2]
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_root .. "/" .. module.config.public.name)))
 
-        local generated = modules.get_module_config("core.summary").strategy(
-            dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
-            ws_root,
-            1,
-            {}
+        local generated = vim.list_extend(
+            {"* Index"},
+            modules.get_module_config("core.summary").strategy(
+                dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
+                ws_root,
+                2,
+                {}
+            )
         )
 
         local buf = nil
