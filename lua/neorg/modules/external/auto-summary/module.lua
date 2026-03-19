@@ -512,8 +512,8 @@ module.private = {
 
     --- Generate tree lines for inline mode (sub_category_file is false).
     --- When list_children_in_parent is true, all descendant entries are listed
-    --- under each heading (no sub-headings). When false, sub-categories become
-    --- nested headings with increasing heading levels and only direct entries.
+    --- under each heading (no sub-headings). When false, only the direct entries
+    --- of each child are listed (no nested sub-category headings).
     generate_tree_lines = function(node, heading_level)
         local config = module.config.public
         local result = {}
@@ -531,20 +531,10 @@ module.private = {
                 module.private.sort_entries(entries)
                 vim.list_extend(result, module.private.format_entry_lines(entries, indent))
             else
-                -- Generate sub-heading lines
-                local sub_lines = {}
-                if module.private.has_children(child) then
-                    sub_lines = module.private.generate_tree_lines(child, heading_level + 1)
-                end
-
-                -- Generate entry lines, sorted and deduplicated
+                -- Only direct entries, no nested sub-category headings
                 local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
                 module.private.sort_entries(entries)
-                local entry_lines = module.private.format_entry_lines(entries, indent)
-
-                -- Combine: sub-headings first, then entries
-                vim.list_extend(result, sub_lines)
-                vim.list_extend(result, entry_lines)
+                vim.list_extend(result, module.private.format_entry_lines(entries, indent))
             end
         end
         return result
