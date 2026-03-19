@@ -61,6 +61,15 @@ module.config.public = {
     sub_category_file = true,
     categories_dir = "categories",
     list_children_in_parent = true,
+    metadata = false,
+    sub_categories_before_notes = true,
+    sort_by = "alphabetical",
+    sort_direction = "ascending",
+    ---@param meta table normalized metadata of the note
+    ---@return string formatted title
+    format_note_title = function(meta)
+        return meta.title
+    end,
 }
 
 ---@class external.auto-summary
@@ -98,32 +107,49 @@ module.public = {
             -- Generate main summary with links to category files
             local main_lines = module.private.generate_main_summary_with_files(tree)
 
-            -- Generate all category file contents (relative paths -> content)
+            -- Generate all category file contents (relative paths -> body content)
             local category_files = module.private.generate_all_category_files(tree)
 
-            -- Read existing metadata from main summary
-            local main_metadata = module.private.read_existing_metadata(summary_path)
+            local main_body = table.concat(main_lines, "\n") .. "\n"
 
-            -- Close buffers for main summary
-            module.private.close_file_buffers(summary_path)
+            -- Prepare content with metadata handling (BEFORE deleting categories dir)
+            local files_to_write = {}
 
-            -- Build main content
-            local main_content = table.concat(main_lines, "\n") .. "\n"
-            if main_metadata then
-                main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
+            -- Main summary
+            local main_content
+            if config.metadata then
+                main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
+            else
+                local main_metadata = module.private.read_existing_metadata(summary_path)
+                module.private.close_file_buffers(summary_path)
+                main_content = main_body
+                if main_metadata then
+                    main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
+                end
+            end
+            table.insert(files_to_write, { path = summary_path, content = main_content })
+
+            -- Category files (read old data BEFORE directory deletion)
+            local category_contents = {}
+            for rel_path, body in pairs(category_files) do
+                local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
+                if config.metadata then
+                    -- Extract title from body (first heading)
+                    local cat_title = body:match("^%*+ ([^\n]+)") or vim.fn.fnamemodify(rel_path, ":t:r")
+                    category_contents[abs_path] =
+                        module.private.prepare_content_with_metadata(abs_path, body, cat_title)
+                else
+                    category_contents[abs_path] = body
+                end
             end
 
-            -- Clean up existing categories directory and recreate
+            -- Now safe to delete categories directory
             if cats_dir_abs and vim.fn.isdirectory(cats_dir_abs) == 1 then
                 vim.fn.delete(cats_dir_abs, "rf")
             end
 
-            -- Prepare all files for writing
-            local files_to_write = {}
-            table.insert(files_to_write, { path = summary_path, content = main_content })
-
-            for rel_path, content in pairs(category_files) do
-                local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
+            -- Create directories and prepare file entries
+            for abs_path, content in pairs(category_contents) do
                 local dir = vim.fn.fnamemodify(abs_path, ":h")
                 vim.fn.mkdir(dir, "p")
                 table.insert(files_to_write, { path = abs_path, content = content })
@@ -138,17 +164,19 @@ module.public = {
         else
             -- Generate main summary with tree sub-headings
             local main_lines = vim.list_extend({ "* Index" }, module.private.generate_tree_lines(tree, 2))
+            local main_body = table.concat(main_lines, "\n") .. "\n"
 
-            -- Read existing metadata
-            local metadata = module.private.read_existing_metadata(summary_path)
-
-            -- Close buffers
-            module.private.close_file_buffers(summary_path)
-
-            -- Build content
-            local content = table.concat(main_lines, "\n") .. "\n"
-            if metadata then
-                content = table.concat(metadata, "\n") .. "\n\n" .. content
+            -- Handle metadata
+            local content
+            if config.metadata then
+                content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
+            else
+                local metadata = module.private.read_existing_metadata(summary_path)
+                module.private.close_file_buffers(summary_path)
+                content = main_body
+                if metadata then
+                    content = table.concat(metadata, "\n") .. "\n\n" .. content
+                end
             end
 
             -- Write single file
@@ -219,6 +247,18 @@ module.private = {
 
             local description = (metadata.description ~= vim.NIL) and metadata.description
 
+            local created = (metadata.created ~= vim.NIL and metadata.created ~= "") and metadata.created or nil
+            local updated = (metadata.updated ~= vim.NIL and metadata.updated ~= "") and metadata.updated or nil
+
+            -- Build normalized metadata for format_note_title callback
+            local norm_meta = {}
+            for k, v in pairs(metadata) do
+                if v ~= vim.NIL then
+                    norm_meta[k] = v
+                end
+            end
+            norm_meta.title = title -- ensure resolved title is available
+
             local cats = metadata.categories
             if not cats or cats == vim.NIL then
                 cats = { "Uncategorized" }
@@ -226,7 +266,14 @@ module.private = {
                 cats = { tostring(cats) }
             end
 
-            local entry = { title = title, norgname = norgname, description = description }
+            local entry = {
+                title = title,
+                norgname = norgname,
+                description = description,
+                created = created,
+                updated = updated,
+                metadata = norm_meta,
+            }
 
             for _, cat in ipairs(cats) do
                 if not categorized[cat] then
@@ -316,9 +363,11 @@ module.private = {
 
     --- Format a list of entries as indented link lines.
     format_entry_lines = function(entries, indent)
+        local config = module.config.public
         local lines = {}
         for _, entry in ipairs(entries) do
-            local line = indent .. "- {:$" .. entry.norgname .. ":}[" .. entry.title .. "]"
+            local display_title = config.format_note_title(entry.metadata)
+            local line = indent .. "- {:$" .. entry.norgname .. ":}[" .. display_title .. "]"
             if entry.description and entry.description ~= "" then
                 line = line .. " - " .. entry.description
             end
@@ -327,10 +376,29 @@ module.private = {
         return lines
     end,
 
-    --- Sort entries alphabetically by title (case-insensitive).
+    --- Sort entries based on config (sort_by and sort_direction).
     sort_entries = function(entries)
+        local config = module.config.public
+        local sort_by = config.sort_by
+        local ascending = config.sort_direction == "ascending"
+
         table.sort(entries, function(a, b)
-            return a.title:lower() < b.title:lower()
+            local va, vb
+            if sort_by == "created" then
+                va = a.created or ""
+                vb = b.created or ""
+            elseif sort_by == "updated" then
+                va = a.updated or ""
+                vb = b.updated or ""
+            else -- "alphabetical"
+                va = a.title:lower()
+                vb = b.title:lower()
+            end
+            if ascending then
+                return va < vb
+            else
+                return va > vb
+            end
         end)
     end,
 
@@ -347,10 +415,15 @@ module.private = {
         return result
     end,
 
-    --- Sort a list of strings alphabetically (case-insensitive).
+    --- Sort a list of strings alphabetically (case-insensitive), respecting sort_direction.
     sort_strings = function(list)
+        local ascending = module.config.public.sort_direction == "ascending"
         table.sort(list, function(a, b)
-            return a:lower() < b:lower()
+            if ascending then
+                return a:lower() < b:lower()
+            else
+                return a:lower() > b:lower()
+            end
         end)
     end,
 
@@ -362,7 +435,8 @@ module.private = {
         local indent = string.rep(" ", heading_level + 1)
         local result = { string.rep("*", heading_level) .. " Index" }
 
-        -- Add top-level category headings with links (before entries)
+        -- Generate heading lines
+        local heading_lines = {}
         local child_heading_level = 2
         local sorted_children = vim.list_extend({}, tree.child_order)
         module.private.sort_strings(sorted_children)
@@ -370,16 +444,26 @@ module.private = {
             local child = tree.children[child_name]
             local norgname = module.private.get_category_norgname({ child_name }, child)
             table.insert(
-                result,
+                heading_lines,
                 string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
             )
         end
 
-        -- If list_children_in_parent, add all entries flattened under the top heading
+        -- Generate entry lines
+        local entry_lines = {}
         if config.list_children_in_parent then
             local entries = module.private.deduplicate_entries(module.private.collect_all_entries(tree))
             module.private.sort_entries(entries)
-            vim.list_extend(result, module.private.format_entry_lines(entries, indent))
+            entry_lines = module.private.format_entry_lines(entries, indent)
+        end
+
+        -- Combine based on config
+        if config.sub_categories_before_notes then
+            vim.list_extend(result, heading_lines)
+            vim.list_extend(result, entry_lines)
+        else
+            vim.list_extend(result, entry_lines)
+            vim.list_extend(result, heading_lines)
         end
 
         return result
@@ -388,6 +472,7 @@ module.private = {
     --- Generate tree lines for inline mode (sub_category_file is false).
     --- Sub-categories become nested headings with increasing heading levels.
     generate_tree_lines = function(node, heading_level)
+        local config = module.config.public
         local result = {}
         local sorted_children = vim.list_extend({}, node.child_order)
         module.private.sort_strings(sorted_children)
@@ -397,15 +482,25 @@ module.private = {
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
-            -- Recurse into children first (sub-category headings before entries)
+            -- Generate sub-heading lines
+            local sub_lines = {}
             if module.private.has_children(child) then
-                vim.list_extend(result, module.private.generate_tree_lines(child, heading_level + 1))
+                sub_lines = module.private.generate_tree_lines(child, heading_level + 1)
             end
 
-            -- List direct entries under this heading, sorted and deduplicated
+            -- Generate entry lines, sorted and deduplicated
             local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
             module.private.sort_entries(entries)
-            vim.list_extend(result, module.private.format_entry_lines(entries, indent))
+            local entry_lines = module.private.format_entry_lines(entries, indent)
+
+            -- Combine based on config
+            if config.sub_categories_before_notes then
+                vim.list_extend(result, sub_lines)
+                vim.list_extend(result, entry_lines)
+            else
+                vim.list_extend(result, entry_lines)
+                vim.list_extend(result, sub_lines)
+            end
         end
         return result
     end,
@@ -423,7 +518,8 @@ module.private = {
             local lines = { string.rep("*", heading_level) .. " " .. node_name }
 
             if module.private.has_children(node) then
-                -- Branch node: children headings first, then entries
+                -- Branch node: generate heading lines and entry lines separately
+                local heading_lines = {}
                 local child_heading_level = 2
                 local sorted_children = vim.list_extend({}, node.child_order)
                 module.private.sort_strings(sorted_children)
@@ -433,21 +529,29 @@ module.private = {
                     table.insert(child_path_parts, child_name)
                     local norgname = module.private.get_category_norgname(child_path_parts, child)
                     table.insert(
-                        lines,
+                        heading_lines,
                         string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
                     )
                 end
 
+                local entry_lines
                 if config.list_children_in_parent then
-                    -- Add all descendant entries flattened, sorted and deduplicated
                     local entries = module.private.deduplicate_entries(module.private.collect_all_entries(node))
                     module.private.sort_entries(entries)
-                    vim.list_extend(lines, module.private.format_entry_lines(entries, indent))
+                    entry_lines = module.private.format_entry_lines(entries, indent)
                 else
-                    -- Add only direct entries, sorted and deduplicated
                     local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                     module.private.sort_entries(entries)
-                    vim.list_extend(lines, module.private.format_entry_lines(entries, indent))
+                    entry_lines = module.private.format_entry_lines(entries, indent)
+                end
+
+                -- Combine based on config
+                if config.sub_categories_before_notes then
+                    vim.list_extend(lines, heading_lines)
+                    vim.list_extend(lines, entry_lines)
+                else
+                    vim.list_extend(lines, entry_lines)
+                    vim.list_extend(lines, heading_lines)
                 end
             else
                 -- Leaf node: list direct entries, sorted and deduplicated
@@ -529,6 +633,123 @@ module.private = {
         end
 
         return metadata
+    end,
+
+    --- Read file body content (everything except the @document.meta block).
+    --- @param path string absolute file path
+    --- @return string|nil body content or nil if file doesn't exist
+    read_file_body = function(path)
+        if vim.fn.filereadable(path) ~= 1 then
+            return nil
+        end
+        local lines = vim.fn.readfile(path)
+        local in_meta = false
+        local body_lines = {}
+        local found_meta = false
+        for _, line in ipairs(lines) do
+            if not found_meta and line:match("^@document%.meta") then
+                in_meta = true
+                found_meta = true
+            elseif in_meta and line:match("^@end") then
+                in_meta = false
+            elseif not in_meta then
+                table.insert(body_lines, line)
+            end
+        end
+        -- Trim leading blank lines
+        while #body_lines > 0 and body_lines[1]:match("^%s*$") do
+            table.remove(body_lines, 1)
+        end
+        return table.concat(body_lines, "\n")
+    end,
+
+    --- Generate fresh metadata lines for a summary file using the metagen API.
+    --- @param title string the title for the metadata
+    --- @return string[] metadata lines
+    generate_metadata_lines = function(title)
+        local metagen = module.required["core.esupports.metagen"]
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "placeholder" })
+        local lines = metagen.construct_metadata(buf, { title = title })
+        vim.api.nvim_buf_delete(buf, { force = true })
+        -- Remove trailing empty line if present (added by metagen for spacing)
+        while #lines > 0 and lines[#lines] == "" do
+            table.remove(lines)
+        end
+        return lines
+    end,
+
+    --- Update the "updated" timestamp in existing metadata lines using the metagen API.
+    --- @param metadata_lines string[] existing metadata lines
+    --- @return string[] updated metadata lines
+    update_metadata_timestamp = function(metadata_lines)
+        local metagen = module.required["core.esupports.metagen"]
+        -- Generate fresh metadata to extract the updated timestamp format
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "placeholder" })
+        local fresh_lines = metagen.construct_metadata(buf, {})
+        vim.api.nvim_buf_delete(buf, { force = true })
+
+        -- Extract the updated line from fresh metadata
+        local fresh_updated_line = nil
+        for _, line in ipairs(fresh_lines) do
+            if line:match("^%s*updated") then
+                fresh_updated_line = line
+                break
+            end
+        end
+
+        if not fresh_updated_line then
+            return metadata_lines
+        end
+
+        -- Replace or insert the updated field in old metadata
+        local result = {}
+        local replaced = false
+        for _, line in ipairs(metadata_lines) do
+            if not replaced and line:match("^%s*updated") then
+                table.insert(result, fresh_updated_line)
+                replaced = true
+            elseif not replaced and line:match("^@end") then
+                -- Add updated before @end if not found in existing metadata
+                table.insert(result, fresh_updated_line)
+                table.insert(result, line)
+                replaced = true
+            else
+                table.insert(result, line)
+            end
+        end
+        return result
+    end,
+
+    --- Prepare file content with metadata handling.
+    --- For new files or files without metadata: generate fresh metadata.
+    --- For existing files with metadata and changed content: update the "updated" field.
+    --- For existing files with metadata and unchanged content: keep metadata as-is.
+    --- @param path string absolute file path
+    --- @param body string the body content (without metadata)
+    --- @param title string the title for fresh metadata
+    --- @return string full file content with metadata
+    prepare_content_with_metadata = function(path, body, title)
+        local old_metadata_lines = module.private.read_existing_metadata(path)
+        local old_body = module.private.read_file_body(path)
+        module.private.close_file_buffers(path)
+
+        local metadata_lines
+        if old_metadata_lines then
+            if old_body and vim.trim(old_body) == vim.trim(body) then
+                -- Content unchanged, keep old metadata as-is
+                metadata_lines = old_metadata_lines
+            else
+                -- Content changed, update the updated timestamp
+                metadata_lines = module.private.update_metadata_timestamp(old_metadata_lines)
+            end
+        else
+            -- No existing metadata, generate fresh
+            metadata_lines = module.private.generate_metadata_lines(title)
+        end
+
+        return table.concat(metadata_lines, "\n") .. "\n\n" .. body
     end,
 
     --- Close all buffers associated with a file path.
