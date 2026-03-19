@@ -77,4 +77,4 @@ categories/
 └── f.norg                  # summary for category "f"
 ```
 
-Each category's summary file lists its first-level children as headings that link to the corresponding sub-category summary files, along with note file entries (sorted and deduplicated according to the `sort_by` and `sort_direction` settings). Sub-category headings are listed before the note entries. When `nested_category_headings` is enabled, all descendant norg files are also listed under each sub-category heading. When disabled, only notes directly categorized under each category are listed.
+Each category's summary file lists its first-level children as headings that link to the corresponding sub-category summary files, along with note file entries (sorted and deduplicated according to the `sort_by` and `sort_direction` settings). Note entries are listed before the sub-category headings. When `nested_category_headings` is enabled, all descendant norg files are also listed under each sub-category heading. When disabled, only notes directly categorized under each category are listed.
