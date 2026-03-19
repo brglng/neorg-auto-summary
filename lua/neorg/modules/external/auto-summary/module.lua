@@ -162,8 +162,10 @@ module.private = {
             local created_buf = false
             if bufnr == -1 then
                 bufnr = vim.fn.bufadd(abs_path)
-                vim.fn.bufload(bufnr)
                 created_buf = true
+            end
+            if not vim.api.nvim_buf_is_loaded(bufnr) then
+                vim.fn.bufload(bufnr)
             end
 
             local metadata = ts.get_document_metadata(bufnr) or {}
