@@ -20,7 +20,8 @@ Add the following to your Neorg plugin configuration:
             ["external.auto-summary"] = {
                 config = {
                     name = "index.norg",            -- Name of the main summary file
-                    autocmd = false,                 -- Whether to create an autocommand to update the summary on save
+                    summary_on_launch = false,       -- Whether to generate summaries when the module is loaded
+                    update_on_change = false,        -- Whether to create an autocommand to update the summary on save
                     category_separator = ".",        -- Separator for sub-categories (e.g. "a.b.c")
                     per_category_summary = true,     -- Put each sub-category summary in a separate file
                     categories_dir = "categories",   -- Root subdirectory for sub-category summary files
@@ -47,7 +48,8 @@ Add the following to your Neorg plugin configuration:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `name` | string | `"index.norg"` | Name of the main summary file. |
-| `autocmd` | boolean | `false` | When `true`, automatically regenerates the summary on every `.norg` file save. |
+| `summary_on_launch` | boolean | `false` | When `true`, automatically generates summaries for all workspaces when the module is loaded. |
+| `update_on_change` | boolean | `false` | When `true`, automatically regenerates the summary on every `.norg` file save. |
 | `category_separator` | string | `"."` | Separator for sub-categories in the `categories` metadata field. For example, `"a.b.c"` splits into three levels. |
 | `per_category_summary` | boolean | `true` | When `true`, each sub-category summary is written to a separate file under the `categories_dir`. When `false`, sub-categories are rendered as nested headings in the main summary file. |
 | `categories_dir` | string | `"categories"` | Root subdirectory (relative to workspace root) where sub-category summary files are stored. Only used when `per_category_summary` is `true`. |

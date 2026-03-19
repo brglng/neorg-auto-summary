@@ -30,7 +30,17 @@ module.load = function()
             },
         })
     end)
-    if module.config.public.autocmd then
+    if module.config.public.summary_on_launch then
+        modules.await("core.dirman", function(dirman)
+            vim.schedule(function()
+                local workspaces = dirman.get_workspaces()
+                for ws_name in pairs(workspaces) do
+                    module.public.auto_summary(ws_name)
+                end
+            end)
+        end)
+    end
+    if module.config.public.update_on_change then
         vim.api.nvim_create_autocmd("BufWritePost", {
             pattern = "*.norg",
             callback = function(e)
@@ -62,7 +72,8 @@ end
 
 module.config.public = {
     name = "index.norg",
-    autocmd = false,
+    summary_on_launch = false,
+    update_on_change = false,
     category_separator = ".",
     per_category_summary = true,
     categories_dir = "categories",
@@ -876,7 +887,7 @@ module.on_event = function(event)
         vim.schedule(function()
             module.public.auto_summary()
         end)
-    elseif module.config.public.autocmd then
+    elseif module.config.public.update_on_change then
         if event.type == "core.dirman.events.workspace_changed" then
             vim.schedule(function()
                 local new_ws = event.content and event.content.new
