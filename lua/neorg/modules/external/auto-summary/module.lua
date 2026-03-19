@@ -67,7 +67,7 @@ module.config.public = {
     per_category_summary = true,
     categories_dir = "categories",
     nested_category_headings = true,
-    create_metadata = false,
+    inject_metadata = false,
     sort_by = "alphabetical",
     sort_direction = "ascending",
     ---@param meta table normalized metadata of the note
@@ -132,8 +132,7 @@ module.public = {
 
             -- Main summary
             local main_content
-            if config.create_metadata then
-                main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
+            if config.inject_metadata then
             else
                 local main_metadata = module.private.read_existing_metadata(summary_path)
                 module.private.close_file_buffers(summary_path)
@@ -148,7 +147,7 @@ module.public = {
             local category_contents = {}
             for rel_path, body in pairs(category_files) do
                 local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
-                if config.create_metadata then
+                if config.inject_metadata then
                     local cat_title = body:match("^%*+ ([^\n]+)") or vim.fn.fnamemodify(rel_path, ":t:r")
                     category_contents[abs_path] =
                         module.private.prepare_content_with_metadata(abs_path, body, cat_title)
@@ -182,8 +181,7 @@ module.public = {
 
             -- Handle metadata
             local content
-            if config.create_metadata then
-                content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
+            if config.inject_metadata then
             else
                 local metadata = module.private.read_existing_metadata(summary_path)
                 module.private.close_file_buffers(summary_path)

@@ -25,7 +25,7 @@ Add the following to your Neorg plugin configuration:
                     per_category_summary = true,     -- Put each sub-category summary in a separate file
                     categories_dir = "categories",   -- Root subdirectory for sub-category summary files
                     nested_category_headings = true, -- List all descendant notes under each category heading
-                    create_metadata = false,         -- Generate metadata at the top of summary files
+                    inject_metadata = false,         -- Generate metadata at the top of summary files
                     sort_by = "alphabetical",        -- How to sort: "alphabetical", "created", or "updated"
                     sort_direction = "ascending",    -- Sort direction: "ascending" or "descending"
                     format_note_title = function(meta) -- Custom note title formatting callback
@@ -52,7 +52,7 @@ Add the following to your Neorg plugin configuration:
 | `per_category_summary` | boolean | `true` | When `true`, each sub-category summary is written to a separate file under the `categories_dir`. When `false`, sub-categories are rendered as nested headings in the main summary file. |
 | `categories_dir` | string | `"categories"` | Root subdirectory (relative to workspace root) where sub-category summary files are stored. Only used when `per_category_summary` is `true`. |
 | `nested_category_headings` | boolean | `true` | When `true`, all descendant norg files are listed under each category heading. In file mode (`per_category_summary` is `true`), entries from sub-categories are shown under their corresponding sub-category headings. In inline mode (`per_category_summary` is `false`), all descendant entries are flattened under each heading without sub-headings. When `false`, only notes directly categorized under each category are listed; no nested sub-category headings are created. |
-| `create_metadata` | boolean | `false` | When `true`, generates `@document.meta` at the top of summary files. For new files, fresh metadata is created via the metagen API. For existing files without metadata, it is added. For existing files with metadata whose body content changed, the `updated` timestamp is refreshed. |
+| `inject_metadata` | boolean | `false` | When `true`, generates `@document.meta` at the top of summary files. For new files, fresh metadata is created via the metagen API. For existing files without metadata, it is added. For existing files with metadata whose body content changed, the `updated` timestamp is refreshed. |
 | `sort_by` | string | `"alphabetical"` | How to sort headings and note entries. `"alphabetical"` sorts by title, `"created"` sorts by the note's `created` metadata timestamp, `"updated"` sorts by the note's `updated` metadata timestamp. Category headings are always sorted alphabetically. |
 | `sort_direction` | string | `"ascending"` | Sort direction: `"ascending"` (A→Z or oldest→newest) or `"descending"` (Z→A or newest→oldest). |
 | `format_note_title` | function | `function(meta) return meta.title end` | A callback function that receives the note's normalized metadata table and returns a formatted title string. The metadata table contains fields such as `title`, `description`, `categories`, `created`, `updated`, etc. |
