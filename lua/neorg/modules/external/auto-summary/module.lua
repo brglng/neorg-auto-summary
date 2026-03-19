@@ -47,7 +47,7 @@ module.load = function()
                 if filename == summary_name then
                     return
                 end
-                if module.config.public.sub_category_file then
+                if module.config.public.per_category_summary then
                     local cats_dir =
                         vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. module.config.public.categories_dir))
                     if vim.startswith(filename, cats_dir .. "/") then
@@ -64,10 +64,10 @@ module.config.public = {
     name = "index.norg",
     autocmd = false,
     category_separator = ".",
-    sub_category_file = true,
+    per_category_summary = true,
     categories_dir = "categories",
-    list_children_in_parent = true,
-    metadata = false,
+    nested_category_headings = true,
+    create_metadata = false,
     sort_by = "alphabetical",
     sort_direction = "ascending",
     ---@param meta table normalized metadata of the note
@@ -107,7 +107,7 @@ module.public = {
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
 
         local cats_dir_abs = nil
-        if config.sub_category_file then
+        if config.per_category_summary then
             cats_dir_abs = vim.fs.normalize(vim.fn.resolve(ws_norm .. "/" .. config.categories_dir))
         end
 
@@ -118,7 +118,7 @@ module.public = {
         -- Build category tree
         local tree = module.private.build_category_tree(categorized, category_order, config.category_separator)
 
-        if config.sub_category_file then
+        if config.per_category_summary then
             -- Generate main summary with links to category files
             local main_lines = module.private.generate_main_summary_with_files(tree)
 
@@ -132,7 +132,7 @@ module.public = {
 
             -- Main summary
             local main_content
-            if config.metadata then
+            if config.create_metadata then
                 main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local main_metadata = module.private.read_existing_metadata(summary_path)
@@ -148,8 +148,7 @@ module.public = {
             local category_contents = {}
             for rel_path, body in pairs(category_files) do
                 local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
-                if config.metadata then
-                    -- Extract title from body (first heading)
+                if config.create_metadata then
                     local cat_title = body:match("^%*+ ([^\n]+)") or vim.fn.fnamemodify(rel_path, ":t:r")
                     category_contents[abs_path] =
                         module.private.prepare_content_with_metadata(abs_path, body, cat_title)
@@ -183,7 +182,7 @@ module.public = {
 
             -- Handle metadata
             local content
-            if config.metadata then
+            if config.create_metadata then
                 content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local metadata = module.private.read_existing_metadata(summary_path)
@@ -470,7 +469,7 @@ module.private = {
         end)
     end,
 
-    --- Generate main summary lines when sub_category_file is enabled.
+    --- Generate main summary lines when per_category_summary is enabled.
     --- Top-level categories become headings that link to their summary files.
     generate_main_summary_with_files = function(tree)
         local config = module.config.public
@@ -482,8 +481,7 @@ module.private = {
         local sorted_children = vim.list_extend({}, tree.child_order)
         module.private.sort_strings(sorted_children)
 
-        if config.list_children_in_parent then
-            -- Notes grouped under their corresponding sub-category headings
+        if config.nested_category_headings then
             for _, child_name in ipairs(sorted_children) do
                 local child = tree.children[child_name]
                 local norgname = module.private.get_category_norgname({ child_name }, child)
@@ -510,8 +508,8 @@ module.private = {
         return result
     end,
 
-    --- Generate tree lines for inline mode (sub_category_file is false).
-    --- When list_children_in_parent is true, all descendant entries are listed
+    --- Generate tree lines for inline mode (per_category_summary is false).
+    --- When nested_category_headings is true, all descendant entries are listed
     --- under each heading (no sub-headings). When false, only the direct entries
     --- of each child are listed (no nested sub-category headings).
     generate_tree_lines = function(node, heading_level)
@@ -525,8 +523,7 @@ module.private = {
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
-            if config.list_children_in_parent then
-                -- List all descendant entries under this heading (no sub-headings)
+            if config.nested_category_headings then
                 local entries = module.private.deduplicate_entries(module.private.collect_all_entries(child))
                 module.private.sort_entries(entries)
                 vim.list_extend(result, module.private.format_entry_lines(entries, indent))
@@ -558,7 +555,7 @@ module.private = {
                 local sorted_children = vim.list_extend({}, node.child_order)
                 module.private.sort_strings(sorted_children)
 
-                if config.list_children_in_parent then
+                if config.nested_category_headings then
                     -- Direct entries of this node (not belonging to any child)
                     local direct_entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                     module.private.sort_entries(direct_entries)
