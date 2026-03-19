@@ -34,9 +34,15 @@ module.load = function()
         vim.api.nvim_create_autocmd("BufWritePost", {
             pattern = "*.norg",
             callback = function(e)
-                local dirman = module.required["core.dirman"]
-                local ws_root = dirman.get_current_workspace()[2]
                 local filename = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(e.file)))
+                local ws_name = module.private.find_workspace_for_file(filename)
+                if not ws_name then
+                    return
+                end
+
+                local dirman = module.required["core.dirman"]
+                local ws_root = vim.fs.normalize(tostring(dirman.get_workspace(ws_name)))
+
                 local summary_name = vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. module.config.public.name))
                 if filename == summary_name then
                     return
@@ -48,7 +54,7 @@ module.load = function()
                         return
                     end
                 end
-                module.public.auto_summary()
+                module.public.auto_summary(ws_name)
             end,
         })
     end
@@ -74,7 +80,9 @@ module.config.public = {
 
 ---@class external.auto-summary
 module.public = {
-    auto_summary = function()
+    --- Generate the auto-summary for a workspace.
+    --- @param ws_name string|nil workspace name; defaults to the current workspace
+    auto_summary = function(ws_name)
         local dirman = modules.get_module("core.dirman")
 
         if not dirman then
@@ -82,7 +90,15 @@ module.public = {
             return
         end
 
-        local ws_root = dirman.get_current_workspace()[2]
+        if not ws_name then
+            ws_name = dirman.get_current_workspace()[1]
+        end
+
+        local ws_root = dirman.get_workspace(ws_name)
+        if not ws_root then
+            utils.notify("Workspace '" .. ws_name .. "' not found")
+            return
+        end
         local ws_norm = vim.fs.normalize(tostring(ws_root))
         local config = module.config.public
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
@@ -93,12 +109,8 @@ module.public = {
         end
 
         -- Collect entries from all norg files
-        local categorized, category_order = module.private.collect_entries(
-            dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
-            ws_norm,
-            summary_path,
-            cats_dir_abs
-        )
+        local categorized, category_order =
+            module.private.collect_entries(dirman.get_norg_files(ws_name) or {}, ws_norm, summary_path, cats_dir_abs)
 
         -- Build category tree
         local tree = module.private.build_category_tree(categorized, category_order, config.category_separator)
@@ -194,6 +206,20 @@ module.public = {
 }
 
 module.private = {
+    --- Find the workspace that contains the given file path.
+    --- @param filepath string normalized absolute file path
+    --- @return string|nil workspace name or nil if not found
+    find_workspace_for_file = function(filepath)
+        local dirman = module.required["core.dirman"]
+        for _, name in ipairs(dirman.get_workspace_names()) do
+            local root = vim.fs.normalize(tostring(dirman.get_workspace(name)))
+            if vim.startswith(filepath, root .. "/") or filepath == root then
+                return name
+            end
+        end
+        return nil
+    end,
+
     --- Safely delete a buffer by detaching LSP clients first to avoid errors.
     --- @param bufnr number buffer number to delete
     safe_buf_delete = function(bufnr)
@@ -842,12 +868,36 @@ module.on_event = function(event)
         vim.schedule(function()
             module.public.auto_summary()
         end)
+    elseif module.config.public.autocmd then
+        if event.type == "core.dirman.events.workspace_changed" then
+            vim.schedule(function()
+                local new_ws = event.content and event.content.new
+                if new_ws then
+                    module.public.auto_summary(new_ws)
+                end
+            end)
+        elseif event.type == "core.dirman.events.file_created" then
+            vim.schedule(function()
+                local bufnr = event.content and event.content.buffer
+                if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+                    local filepath = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(bufnr))))
+                    local ws_name = module.private.find_workspace_for_file(filepath)
+                    if ws_name then
+                        module.public.auto_summary(ws_name)
+                    end
+                end
+            end)
+        end
     end
 end
 
 module.events.subscribed = {
     ["core.neorgcmd"] = {
         ["auto-summary.summarize"] = true,
+    },
+    ["core.dirman"] = {
+        ["workspace_changed"] = true,
+        ["file_created"] = true,
     },
 }
 
