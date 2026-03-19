@@ -511,7 +511,9 @@ module.private = {
     end,
 
     --- Generate tree lines for inline mode (sub_category_file is false).
-    --- Sub-categories become nested headings with increasing heading levels.
+    --- When list_children_in_parent is true, all descendant entries are listed
+    --- under each heading (no sub-headings). When false, sub-categories become
+    --- nested headings with increasing heading levels and only direct entries.
     generate_tree_lines = function(node, heading_level)
         local config = module.config.public
         local result = {}
@@ -523,20 +525,27 @@ module.private = {
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
-            -- Generate sub-heading lines
-            local sub_lines = {}
-            if module.private.has_children(child) then
-                sub_lines = module.private.generate_tree_lines(child, heading_level + 1)
+            if config.list_children_in_parent then
+                -- List all descendant entries under this heading (no sub-headings)
+                local entries = module.private.deduplicate_entries(module.private.collect_all_entries(child))
+                module.private.sort_entries(entries)
+                vim.list_extend(result, module.private.format_entry_lines(entries, indent))
+            else
+                -- Generate sub-heading lines
+                local sub_lines = {}
+                if module.private.has_children(child) then
+                    sub_lines = module.private.generate_tree_lines(child, heading_level + 1)
+                end
+
+                -- Generate entry lines, sorted and deduplicated
+                local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
+                module.private.sort_entries(entries)
+                local entry_lines = module.private.format_entry_lines(entries, indent)
+
+                -- Combine: sub-headings first, then entries
+                vim.list_extend(result, sub_lines)
+                vim.list_extend(result, entry_lines)
             end
-
-            -- Generate entry lines, sorted and deduplicated
-            local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
-            module.private.sort_entries(entries)
-            local entry_lines = module.private.format_entry_lines(entries, indent)
-
-            -- Combine: sub-headings first, then entries
-            vim.list_extend(result, sub_lines)
-            vim.list_extend(result, entry_lines)
         end
         return result
     end,

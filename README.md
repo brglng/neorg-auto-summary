@@ -24,7 +24,7 @@ Add the following to your Neorg plugin configuration:
                     category_separator = ".",        -- Separator for sub-categories (e.g. "a.b.c")
                     sub_category_file = true,        -- Put each sub-category summary in a separate file
                     categories_dir = "categories",   -- Root subdirectory for sub-category summary files
-                    list_children_in_parent = true,  -- List all descendant norg files in parent summary files
+                    list_children_in_parent = true,  -- List all descendant notes under each category heading
                     metadata = false,                -- Generate metadata at the top of summary files
                     sort_by = "alphabetical",        -- How to sort: "alphabetical", "created", or "updated"
                     sort_direction = "ascending",    -- Sort direction: "ascending" or "descending"
@@ -51,7 +51,7 @@ Add the following to your Neorg plugin configuration:
 | `category_separator` | string | `"."` | Separator for sub-categories in the `categories` metadata field. For example, `"a.b.c"` splits into three levels. |
 | `sub_category_file` | boolean | `true` | When `true`, each sub-category summary is written to a separate file under the `categories_dir`. When `false`, sub-categories are rendered as nested headings in the main summary file. |
 | `categories_dir` | string | `"categories"` | Root subdirectory (relative to workspace root) where sub-category summary files are stored. Only used when `sub_category_file` is `true`. |
-| `list_children_in_parent` | boolean | `true` | When `true` (and `sub_category_file` is `true`), all descendant norg files are listed in each parent's summary file, flattened under the top-level heading. |
+| `list_children_in_parent` | boolean | `true` | When `true`, all descendant norg files are listed under each category heading. In file mode (`sub_category_file` is `true`), entries from sub-categories are shown under their corresponding sub-category headings. In inline mode (`sub_category_file` is `false`), all descendant entries are flattened under each heading without sub-headings. When `false`, only notes directly categorized under each category are listed, and sub-categories are shown as separate headings or links. |
 | `metadata` | boolean | `false` | When `true`, generates `@document.meta` at the top of summary files. For new files, fresh metadata is created via the metagen API. For existing files without metadata, it is added. For existing files with metadata whose body content changed, the `updated` timestamp is refreshed. |
 | `sort_by` | string | `"alphabetical"` | How to sort headings and note entries. `"alphabetical"` sorts by title, `"created"` sorts by the note's `created` metadata timestamp, `"updated"` sorts by the note's `updated` metadata timestamp. Category headings are always sorted alphabetically. |
 | `sort_direction` | string | `"ascending"` | Sort direction: `"ascending"` (A→Z or oldest→newest) or `"descending"` (Z→A or newest→oldest). |
@@ -77,4 +77,4 @@ categories/
 └── f.norg                  # summary for category "f"
 ```
 
-Each category's summary file lists its first-level children as headings that link to the corresponding sub-category summary files, along with note file entries (sorted and deduplicated according to the `sort_by` and `sort_direction` settings). Sub-category headings are listed before the note entries. When `list_children_in_parent` is enabled, all descendant norg files are also listed under the top-level heading.
+Each category's summary file lists its first-level children as headings that link to the corresponding sub-category summary files, along with note file entries (sorted and deduplicated according to the `sort_by` and `sort_direction` settings). Sub-category headings are listed before the note entries. When `list_children_in_parent` is enabled, all descendant norg files are also listed under each sub-category heading. When disabled, only notes directly categorized under each category are listed.
