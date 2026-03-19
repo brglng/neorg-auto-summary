@@ -472,38 +472,36 @@ module.private = {
     generate_main_summary_with_files = function(tree)
         local config = module.config.public
         local heading_level = 1
-        local indent = string.rep(" ", heading_level + 1)
         local result = { string.rep("*", heading_level) .. " Index" }
 
-        -- Generate heading lines
-        local heading_lines = {}
         local child_heading_level = 2
+        local child_indent = string.rep(" ", child_heading_level + 2)
         local sorted_children = vim.list_extend({}, tree.child_order)
         module.private.sort_strings(sorted_children)
-        for _, child_name in ipairs(sorted_children) do
-            local child = tree.children[child_name]
-            local norgname = module.private.get_category_norgname({ child_name }, child)
-            table.insert(
-                heading_lines,
-                string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
-            )
-        end
 
-        -- Generate entry lines
-        local entry_lines = {}
         if config.list_children_in_parent then
-            local entries = module.private.deduplicate_entries(module.private.collect_all_entries(tree))
-            module.private.sort_entries(entries)
-            entry_lines = module.private.format_entry_lines(entries, indent)
-        end
-
-        -- Combine based on config
-        if config.sub_categories_before_notes then
-            vim.list_extend(result, heading_lines)
-            vim.list_extend(result, entry_lines)
+            -- Notes grouped under their corresponding sub-category headings
+            for _, child_name in ipairs(sorted_children) do
+                local child = tree.children[child_name]
+                local norgname = module.private.get_category_norgname({ child_name }, child)
+                table.insert(
+                    result,
+                    string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                )
+                local entries = module.private.deduplicate_entries(module.private.collect_all_entries(child))
+                module.private.sort_entries(entries)
+                vim.list_extend(result, module.private.format_entry_lines(entries, child_indent))
+            end
         else
-            vim.list_extend(result, entry_lines)
-            vim.list_extend(result, heading_lines)
+            -- Just headings, no entry lines
+            for _, child_name in ipairs(sorted_children) do
+                local child = tree.children[child_name]
+                local norgname = module.private.get_category_norgname({ child_name }, child)
+                table.insert(
+                    result,
+                    string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                )
+            end
         end
 
         return result
@@ -518,7 +516,7 @@ module.private = {
         module.private.sort_strings(sorted_children)
         for _, child_name in ipairs(sorted_children) do
             local child = node.children[child_name]
-            local indent = string.rep(" ", heading_level + 1)
+            local indent = string.rep(" ", heading_level + 2)
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
@@ -554,44 +552,70 @@ module.private = {
         local function generate_node(node, node_name, path_parts)
             local rel_path = module.private.get_category_rel_path(path_parts, node)
             local heading_level = 1
-            local indent = string.rep(" ", heading_level + 1)
+            local indent = string.rep(" ", heading_level + 2)
             local lines = { string.rep("*", heading_level) .. " " .. node_name }
 
             if module.private.has_children(node) then
-                -- Branch node: generate heading lines and entry lines separately
-                local heading_lines = {}
                 local child_heading_level = 2
+                local child_indent = string.rep(" ", child_heading_level + 2)
                 local sorted_children = vim.list_extend({}, node.child_order)
                 module.private.sort_strings(sorted_children)
-                for _, child_name in ipairs(sorted_children) do
-                    local child = node.children[child_name]
-                    local child_path_parts = vim.list_extend({}, path_parts)
-                    table.insert(child_path_parts, child_name)
-                    local norgname = module.private.get_category_norgname(child_path_parts, child)
-                    table.insert(
-                        heading_lines,
-                        string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
-                    )
-                end
 
-                local entry_lines
                 if config.list_children_in_parent then
-                    local entries = module.private.deduplicate_entries(module.private.collect_all_entries(node))
-                    module.private.sort_entries(entries)
-                    entry_lines = module.private.format_entry_lines(entries, indent)
+                    -- Direct entries of this node (not belonging to any child)
+                    local direct_entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
+                    module.private.sort_entries(direct_entries)
+                    local direct_entry_lines = module.private.format_entry_lines(direct_entries, indent)
+
+                    -- Sub-category headings with their entries grouped underneath
+                    local grouped_lines = {}
+                    for _, child_name in ipairs(sorted_children) do
+                        local child = node.children[child_name]
+                        local child_path_parts = vim.list_extend({}, path_parts)
+                        table.insert(child_path_parts, child_name)
+                        local norgname = module.private.get_category_norgname(child_path_parts, child)
+                        table.insert(
+                            grouped_lines,
+                            string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                        )
+                        local entries = module.private.deduplicate_entries(module.private.collect_all_entries(child))
+                        module.private.sort_entries(entries)
+                        vim.list_extend(grouped_lines, module.private.format_entry_lines(entries, child_indent))
+                    end
+
+                    if config.sub_categories_before_notes then
+                        vim.list_extend(lines, grouped_lines)
+                        vim.list_extend(lines, direct_entry_lines)
+                    else
+                        vim.list_extend(lines, direct_entry_lines)
+                        vim.list_extend(lines, grouped_lines)
+                    end
                 else
+                    -- Headings linking to child files
+                    local heading_lines = {}
+                    for _, child_name in ipairs(sorted_children) do
+                        local child = node.children[child_name]
+                        local child_path_parts = vim.list_extend({}, path_parts)
+                        table.insert(child_path_parts, child_name)
+                        local norgname = module.private.get_category_norgname(child_path_parts, child)
+                        table.insert(
+                            heading_lines,
+                            string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                        )
+                    end
+
+                    -- Only direct entries
                     local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                     module.private.sort_entries(entries)
-                    entry_lines = module.private.format_entry_lines(entries, indent)
-                end
+                    local entry_lines = module.private.format_entry_lines(entries, indent)
 
-                -- Combine based on config
-                if config.sub_categories_before_notes then
-                    vim.list_extend(lines, heading_lines)
-                    vim.list_extend(lines, entry_lines)
-                else
-                    vim.list_extend(lines, entry_lines)
-                    vim.list_extend(lines, heading_lines)
+                    if config.sub_categories_before_notes then
+                        vim.list_extend(lines, heading_lines)
+                        vim.list_extend(lines, entry_lines)
+                    else
+                        vim.list_extend(lines, entry_lines)
+                        vim.list_extend(lines, heading_lines)
+                    end
                 end
             else
                 -- Leaf node: list direct entries, sorted and deduplicated
