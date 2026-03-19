@@ -577,8 +577,8 @@ module.private = {
                         vim.list_extend(grouped_lines, module.private.format_entry_lines(entries, child_indent))
                     end
 
-                    vim.list_extend(lines, grouped_lines)
                     vim.list_extend(lines, direct_entry_lines)
+                    vim.list_extend(lines, grouped_lines)
                 else
                     -- Headings linking to child files
                     local heading_lines = {}
@@ -598,8 +598,8 @@ module.private = {
                     module.private.sort_entries(entries)
                     local entry_lines = module.private.format_entry_lines(entries, indent)
 
-                    vim.list_extend(lines, heading_lines)
                     vim.list_extend(lines, entry_lines)
+                    vim.list_extend(lines, heading_lines)
                 end
             else
                 -- Leaf node: list direct entries, sorted and deduplicated
