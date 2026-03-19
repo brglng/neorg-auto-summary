@@ -157,7 +157,20 @@ module.private = {
                 goto continue
             end
 
-            local metadata = ts.get_document_metadata(abs_path) or {}
+            -- get_document_metadata requires a bufnr, so open a hidden buffer
+            local bufnr = vim.fn.bufnr(abs_path)
+            local created_buf = false
+            if bufnr == -1 then
+                bufnr = vim.fn.bufadd(abs_path)
+                vim.fn.bufload(bufnr)
+                created_buf = true
+            end
+
+            local metadata = ts.get_document_metadata(bufnr) or {}
+
+            if created_buf then
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end
 
             -- Path relative to workspace root, without .norg extension, used in links.
             -- The leading "/" is intentional: combined with the "$" workspace anchor it
