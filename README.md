@@ -17,7 +17,6 @@ Add the following to your Neorg plugin configuration:
     opts = {
         load = {
             ["core.defaults"] = {},
-            ["core.summary"] = {}, -- Required for auto-summary
             ["external.auto-summary"] = {
                 config = {
                     name = "index.norg", -- Name of the summary file

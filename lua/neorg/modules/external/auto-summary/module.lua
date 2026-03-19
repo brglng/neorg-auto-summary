@@ -6,7 +6,7 @@
 --]]
 
 local neorg = require("neorg.core")
-local lib, modules, utils = neorg.lib, neorg.modules, neorg.utils
+local modules, utils = neorg.modules, neorg.utils
 
 local module = modules.create("external.auto-summary")
 
@@ -17,7 +17,6 @@ module.setup = function()
             "core.dirman",
             "core.esupports.metagen",
             "core.integrations.treesitter",
-            "core.summary"
         },
     }
 end
@@ -56,7 +55,6 @@ module.config.public = {
 module.public = {
     auto_summary = function()
         local dirman = modules.get_module("core.dirman")
-        local summary = module.required["core.summary"]
         local ts = module.required["core.integrations.treesitter"]
 
         if not dirman then
@@ -68,12 +66,11 @@ module.public = {
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_root .. "/" .. module.config.public.name)))
 
         local generated = vim.list_extend(
-            {"* Index"},
-            modules.get_module_config("core.summary").strategy(
+            { "* Index" },
+            module.private.generate_summary_lines(
                 dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
                 ws_root,
-                2,
-                {}
+                summary_path
             )
         )
 
@@ -143,7 +140,125 @@ module.public = {
 }
 
 module.private = {
-    -- Add private functions here
+    -- Parse metadata from a .norg file without loading it as a buffer.
+    -- Returns a table with keys like `title`, `description`, `categories` (list).
+    -- Category names are returned as-is (no case normalization).
+    parse_norg_metadata = function(filepath)
+        local f = io.open(filepath, "r")
+        if not f then
+            return {}
+        end
+        local content = f:read("*all")
+        f:close()
+
+        local meta_content = content:match("@document%.meta%s*\n(.-)\n@end")
+        if not meta_content then
+            return {}
+        end
+
+        local metadata = {}
+        local in_categories = false
+        local categories = {}
+
+        for _, line in ipairs(vim.split(meta_content, "\n", { plain = true })) do
+            if in_categories then
+                if line:match("^%s*%]%s*$") then
+                    in_categories = false
+                    metadata.categories = categories
+                else
+                    local cat = line:match("^%s*(.-)%s*$")
+                    if cat ~= "" then
+                        table.insert(categories, cat)
+                    end
+                end
+            else
+                -- Inline array: categories: [cat1 cat2]
+                local inline = line:match("^%s*categories%s*:%s*%[(.-)%]%s*$")
+                if inline then
+                    metadata.categories = {}
+                    for cat in inline:gmatch("%S+") do
+                        table.insert(metadata.categories, cat)
+                    end
+                -- Opening of multiline array: categories: [
+                elseif line:match("^%s*categories%s*:%s*%[%s*$") then
+                    in_categories = true
+                    categories = {}
+                else
+                    local key, value = line:match("^%s*(%w+)%s*:%s*(.+)$")
+                    if key then
+                        metadata[key] = value:match("^%s*(.-)%s*$")
+                    end
+                end
+            end
+        end
+
+        return metadata
+    end,
+
+    -- Generate summary lines for a list of norg files.
+    -- Files are grouped by category without any case normalization.
+    -- List items start at column 0 (aligned with the `**` heading marker).
+    generate_summary_lines = function(files, ws_root, summary_path)
+        local ws_norm = vim.fs.normalize(tostring(ws_root))
+        local categorized = {}
+        local category_order = {}
+
+        for _, file in ipairs(files) do
+            local abs_path = vim.fs.normalize(tostring(file))
+
+            -- Skip the summary file itself
+            if abs_path == summary_path then
+                goto continue
+            end
+
+            local metadata = module.private.parse_norg_metadata(abs_path)
+
+            -- Path relative to workspace root, without .norg extension, used in links.
+            -- The leading "/" is intentional: combined with the "$" workspace anchor it
+            -- produces links of the form {:$/path/to/file:}[Title].
+            local norgname = abs_path:gsub("^" .. vim.pesc(ws_norm), ""):gsub("%.norg$", "")
+
+            -- Fall back to filename when no title is present in metadata
+            local title = (metadata.title and metadata.title ~= "") and metadata.title
+                or vim.fs.basename(abs_path):gsub("%.norg$", "")
+
+            local description = metadata.description
+
+            local cats = metadata.categories
+            if not cats or #cats == 0 then
+                cats = { "Uncategorized" }
+            elseif type(cats) ~= "table" then
+                cats = { tostring(cats) }
+            end
+
+            local entry = { title = title, norgname = norgname, description = description }
+
+            for _, cat in ipairs(cats) do
+                if not categorized[cat] then
+                    categorized[cat] = {}
+                    table.insert(category_order, cat)
+                end
+                table.insert(categorized[cat], entry)
+            end
+
+            ::continue::
+        end
+
+        local result = {}
+
+        for _, category in ipairs(category_order) do
+            table.insert(result, "** " .. category)
+            for _, entry in ipairs(categorized[category]) do
+                local line = "- {:$" .. entry.norgname .. ":}[" .. entry.title .. "]"
+                if entry.description and entry.description ~= "" then
+                    line = line .. " - " .. entry.description
+                end
+                table.insert(result, line)
+            end
+        end
+
+        return result
+    end,
 }
 
 module.on_event = function(event)
