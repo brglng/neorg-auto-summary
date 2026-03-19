@@ -74,67 +74,93 @@ module.public = {
             )
         )
 
-        local buf = nil
-        for _, b in ipairs(vim.api.nvim_list_bufs()) do
-            local buf_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(b))))
-            if buf_path == summary_path then
-                buf = b
-                break
+        -- Read existing metadata from the summary file if it exists
+        local metadata = nil ---@type string[]?
+
+        if vim.fn.filereadable(summary_path) == 1 then
+            local bufnr = vim.fn.bufnr(summary_path)
+            local created_buf = false
+            if bufnr == -1 then
+                bufnr = vim.fn.bufadd(summary_path)
+                created_buf = true
+            end
+            if not vim.api.nvim_buf_is_loaded(bufnr) then
+                vim.fn.bufload(bufnr)
+            end
+
+            local query = utils.ts_parse_query(
+                "norg",
+                [[
+                    (ranged_verbatim_tag
+                        (tag_name) @name
+                        (#eq? @name "document.meta")
+                    ) @meta
+                ]]
+            )
+
+            local root = ts.get_document_root(bufnr)
+
+            if root then
+                local _, found = query:iter_matches(root, bufnr)()
+                if found then
+                    for id, node in pairs(found) do
+                        local name = query.captures[id]
+                        -- node is a list in nvim 0.11+
+                        if vim.islist(node) then
+                            node = node[1]
+                        end
+                        if name == "meta" then
+                            local start_row, _, start_col, end_row, _, end_col = node:range(true)
+                            metadata = vim.api.nvim_buf_get_text(bufnr, start_row, start_col, end_row, end_col, {})
+                            break
+                        end
+                    end
+                end
+            end
+
+            if created_buf then
+                vim.api.nvim_buf_delete(bufnr, { force = true })
             end
         end
 
-        if not buf then
-            buf = vim.api.nvim_create_buf(true, false)
-            vim.api.nvim_buf_call(buf, function()
-                vim.cmd("edit " .. summary_path)
-                vim.cmd("set filetype=norg")
-            end)
-        end
-
-        local metadata = nil ---@type string[]?
-
-        local query = utils.ts_parse_query(
-            "norg",
-            [[
-                (ranged_verbatim_tag
-                    (tag_name) @name
-                    (#eq? @name "document.meta")
-                ) @meta
-            ]]
-        )
-
-        local root = ts.get_document_root(buf)
-
-        if root then
-            local _, found = query:iter_matches(root, buf)()
-            if found then
-                for id, node in pairs(found) do
-                    local name = query.captures[id]
-                    -- node is a list in nvim 0.11+
-                    if vim.islist(node) then
-                        node = node[1]
-                    end
-                    if name == "meta" then
-                        local start_row, _, start_col, end_row, _, end_col = node:range(true)
-                        metadata = vim.api.nvim_buf_get_text(buf, start_row, start_col, end_row, end_col, {})
-                        break
-                    end
+        -- Close any buffers associated with the summary file
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(b) then
+                local buf_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(b))))
+                if buf_path == summary_path then
+                    vim.api.nvim_buf_delete(b, { force = true })
                 end
             end
         end
 
         if metadata then
-            metadata = vim.list_extend(metadata, {""})
+            metadata = vim.list_extend(metadata, { "" })
             generated = vim.list_extend(metadata, generated)
         end
 
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, generated)
-
-        vim.schedule(function()
-            vim.api.nvim_buf_call(buf, function()
-                vim.cmd("update")
+        -- Write to the file asynchronously using vim.uv
+        local content = table.concat(generated, "\n") .. "\n"
+        -- 438 is octal 0666 (rw-rw-rw-), the standard permission for new files
+        vim.uv.fs_open(summary_path, "w", 438, function(open_err, fd)
+            if open_err then
+                vim.schedule(function()
+                    utils.notify("Failed to open summary file: " .. open_err)
+                end)
+                return
+            end
+            vim.uv.fs_write(fd, content, nil, function(write_err, _)
+                vim.uv.fs_close(fd, function(close_err)
+                    vim.schedule(function()
+                        if write_err then
+                            utils.notify("Failed to write summary file: " .. write_err)
+                        elseif close_err then
+                            utils.notify("Failed to close summary file: " .. close_err)
+                        else
+                            utils.notify("Summary generated at " .. summary_path)
+                        end
+                    end)
+                end)
             end)
-            utils.notify("Summary generated at " .. summary_path)
         end)
     end,
 }
@@ -142,7 +168,7 @@ module.public = {
 module.private = {
     -- Generate summary lines for a list of norg files.
     -- Files are grouped by category without any case normalization.
-    -- List items start at column 0 (aligned with the `**` heading marker).
+    -- List items are indented to align with the text of the heading.
     generate_summary_lines = function(files, ws_root, summary_path)
         local ts = module.required["core.integrations.treesitter"]
         local ws_norm = vim.fs.normalize(tostring(ws_root))
@@ -208,10 +234,13 @@ module.private = {
 
         local result = {}
 
+        local heading_level = 2
+        local indent = string.rep(" ", heading_level + 1)
+
         for _, category in ipairs(category_order) do
-            table.insert(result, "** " .. category)
+            table.insert(result, string.rep("*", heading_level) .. " " .. category)
             for _, entry in ipairs(categorized[category]) do
-                local line = "- {:$" .. entry.norgname .. ":}[" .. entry.title .. "]"
+                local line = indent .. "- {:$" .. entry.norgname .. ":}[" .. entry.title .. "]"
                 if entry.description and entry.description ~= "" then
                     line = line .. " - " .. entry.description
                 end
