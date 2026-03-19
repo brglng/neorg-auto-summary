@@ -133,6 +133,7 @@ module.public = {
             -- Main summary
             local main_content
             if config.inject_metadata then
+                main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local main_metadata = module.private.read_existing_metadata(summary_path)
                 module.private.close_file_buffers(summary_path)
@@ -182,6 +183,7 @@ module.public = {
             -- Handle metadata
             local content
             if config.inject_metadata then
+                content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local metadata = module.private.read_existing_metadata(summary_path)
                 module.private.close_file_buffers(summary_path)
