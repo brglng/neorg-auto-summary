@@ -194,6 +194,20 @@ module.public = {
 }
 
 module.private = {
+    --- Safely delete a buffer by detaching LSP clients first to avoid errors.
+    --- @param bufnr number buffer number to delete
+    safe_buf_delete = function(bufnr)
+        if not vim.api.nvim_buf_is_valid(bufnr) then
+            return
+        end
+        -- Detach all LSP clients before deleting to prevent LSP cleanup errors
+        local clients = vim.lsp.get_clients({ bufnr = bufnr })
+        for _, client in ipairs(clients) do
+            vim.lsp.buf_detach_client(bufnr, client.id)
+        end
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end,
+
     --- Collect entries from norg files, grouped by category.
     --- @param files string[] list of absolute file paths
     --- @param ws_norm string normalized workspace root
@@ -233,7 +247,7 @@ module.private = {
             local metadata = ts.get_document_metadata(bufnr) or {}
 
             if created_buf then
-                vim.api.nvim_buf_delete(bufnr, { force = true })
+                module.private.safe_buf_delete(bufnr)
             end
 
             -- Path relative to workspace root, without .norg extension, used in links.
@@ -629,7 +643,7 @@ module.private = {
         end
 
         if created_buf then
-            vim.api.nvim_buf_delete(bufnr, { force = true })
+            module.private.safe_buf_delete(bufnr)
         end
 
         return metadata
@@ -672,7 +686,7 @@ module.private = {
         local buf = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "placeholder" })
         local lines = metagen.construct_metadata(buf, { title = title })
-        vim.api.nvim_buf_delete(buf, { force = true })
+        module.private.safe_buf_delete(buf)
         -- Remove trailing empty lines if present (added by metagen for spacing)
         local end_idx = #lines
         while end_idx > 0 and lines[end_idx] == "" do
@@ -694,7 +708,7 @@ module.private = {
         local buf = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "placeholder" })
         local fresh_lines = metagen.construct_metadata(buf, {})
-        vim.api.nvim_buf_delete(buf, { force = true })
+        module.private.safe_buf_delete(buf)
 
         -- Extract the updated line from fresh metadata
         local fresh_updated_line = nil
@@ -764,7 +778,7 @@ module.private = {
             if vim.api.nvim_buf_is_valid(b) then
                 local buf_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(b))))
                 if buf_path == path then
-                    vim.api.nvim_buf_delete(b, { force = true })
+                    module.private.safe_buf_delete(b)
                 end
             end
         end
