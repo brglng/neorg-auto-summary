@@ -472,7 +472,7 @@ module.private = {
     generate_main_summary_with_files = function(tree)
         local config = module.config.public
         local heading_level = 1
-        local indent = string.rep(" ", heading_level + 2)
+        local indent = string.rep(" ", heading_level + 1)
         local result = { string.rep("*", heading_level) .. " Index" }
 
         -- Generate heading lines
@@ -518,7 +518,7 @@ module.private = {
         module.private.sort_strings(sorted_children)
         for _, child_name in ipairs(sorted_children) do
             local child = node.children[child_name]
-            local indent = string.rep(" ", heading_level + 2)
+            local indent = string.rep(" ", heading_level + 1)
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
@@ -554,7 +554,7 @@ module.private = {
         local function generate_node(node, node_name, path_parts)
             local rel_path = module.private.get_category_rel_path(path_parts, node)
             local heading_level = 1
-            local indent = string.rep(" ", heading_level + 2)
+            local indent = string.rep(" ", heading_level + 1)
             local lines = { string.rep("*", heading_level) .. " " .. node_name }
 
             if module.private.has_children(node) then
