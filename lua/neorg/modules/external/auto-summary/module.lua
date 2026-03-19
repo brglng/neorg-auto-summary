@@ -656,11 +656,12 @@ module.private = {
                 table.insert(body_lines, line)
             end
         end
-        -- Trim leading blank lines
-        while #body_lines > 0 and body_lines[1]:match("^%s*$") do
-            table.remove(body_lines, 1)
+        -- Skip leading blank lines
+        local start_idx = 1
+        while start_idx <= #body_lines and body_lines[start_idx]:match("^%s*$") do
+            start_idx = start_idx + 1
         end
-        return table.concat(body_lines, "\n")
+        return table.concat(body_lines, "\n", start_idx)
     end,
 
     --- Generate fresh metadata lines for a summary file using the metagen API.
@@ -672,11 +673,16 @@ module.private = {
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "placeholder" })
         local lines = metagen.construct_metadata(buf, { title = title })
         vim.api.nvim_buf_delete(buf, { force = true })
-        -- Remove trailing empty line if present (added by metagen for spacing)
-        while #lines > 0 and lines[#lines] == "" do
-            table.remove(lines)
+        -- Remove trailing empty lines if present (added by metagen for spacing)
+        local end_idx = #lines
+        while end_idx > 0 and lines[end_idx] == "" do
+            end_idx = end_idx - 1
         end
-        return lines
+        local result = {}
+        for i = 1, end_idx do
+            table.insert(result, lines[i])
+        end
+        return result
     end,
 
     --- Update the "updated" timestamp in existing metadata lines using the metagen API.
