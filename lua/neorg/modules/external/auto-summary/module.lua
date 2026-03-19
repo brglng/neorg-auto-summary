@@ -68,7 +68,6 @@ module.config.public = {
     categories_dir = "categories",
     list_children_in_parent = true,
     metadata = false,
-    sub_categories_before_notes = true,
     sort_by = "alphabetical",
     sort_direction = "ascending",
     ---@param meta table normalized metadata of the note
@@ -88,6 +87,10 @@ module.public = {
         if not dirman then
             utils.notify("`core.dirman` is not loaded! It is required to generate summaries")
             return
+        end
+
+        if type(ws_name) == "table" then
+            ws_name = ws_name[1]
         end
 
         if not ws_name then
@@ -531,14 +534,9 @@ module.private = {
             module.private.sort_entries(entries)
             local entry_lines = module.private.format_entry_lines(entries, indent)
 
-            -- Combine based on config
-            if config.sub_categories_before_notes then
-                vim.list_extend(result, sub_lines)
-                vim.list_extend(result, entry_lines)
-            else
-                vim.list_extend(result, entry_lines)
-                vim.list_extend(result, sub_lines)
-            end
+            -- Combine: sub-headings first, then entries
+            vim.list_extend(result, sub_lines)
+            vim.list_extend(result, entry_lines)
         end
         return result
     end,
@@ -583,13 +581,8 @@ module.private = {
                         vim.list_extend(grouped_lines, module.private.format_entry_lines(entries, child_indent))
                     end
 
-                    if config.sub_categories_before_notes then
-                        vim.list_extend(lines, grouped_lines)
-                        vim.list_extend(lines, direct_entry_lines)
-                    else
-                        vim.list_extend(lines, direct_entry_lines)
-                        vim.list_extend(lines, grouped_lines)
-                    end
+                    vim.list_extend(lines, grouped_lines)
+                    vim.list_extend(lines, direct_entry_lines)
                 else
                     -- Headings linking to child files
                     local heading_lines = {}
@@ -609,13 +602,8 @@ module.private = {
                     module.private.sort_entries(entries)
                     local entry_lines = module.private.format_entry_lines(entries, indent)
 
-                    if config.sub_categories_before_notes then
-                        vim.list_extend(lines, heading_lines)
-                        vim.list_extend(lines, entry_lines)
-                    else
-                        vim.list_extend(lines, entry_lines)
-                        vim.list_extend(lines, heading_lines)
-                    end
+                    vim.list_extend(lines, heading_lines)
+                    vim.list_extend(lines, entry_lines)
                 end
             else
                 -- Leaf node: list direct entries, sorted and deduplicated
