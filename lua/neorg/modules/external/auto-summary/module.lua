@@ -6,7 +6,7 @@
 --]]
 
 local neorg = require("neorg.core")
-local lib, modules, utils = neorg.lib, neorg.modules, neorg.utils
+local modules, utils = neorg.modules, neorg.utils
 
 local module = modules.create("external.auto-summary")
 
@@ -17,7 +17,6 @@ module.setup = function()
             "core.dirman",
             "core.esupports.metagen",
             "core.integrations.treesitter",
-            "core.summary"
         },
     }
 end
@@ -56,7 +55,6 @@ module.config.public = {
 module.public = {
     auto_summary = function()
         local dirman = modules.get_module("core.dirman")
-        local summary = module.required["core.summary"]
         local ts = module.required["core.integrations.treesitter"]
 
         if not dirman then
@@ -68,12 +66,11 @@ module.public = {
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_root .. "/" .. module.config.public.name)))
 
         local generated = vim.list_extend(
-            {"* Index"},
-            modules.get_module_config("core.summary").strategy(
+            { "* Index" },
+            module.private.generate_summary_lines(
                 dirman.get_norg_files(dirman.get_current_workspace()[1]) or {},
                 ws_root,
-                2,
-                {}
+                summary_path
             )
         )
 
@@ -143,7 +140,72 @@ module.public = {
 }
 
 module.private = {
-    -- Add private functions here
+    -- Generate summary lines for a list of norg files.
+    -- Files are grouped by category without any case normalization.
+    -- List items start at column 0 (aligned with the `**` heading marker).
+    generate_summary_lines = function(files, ws_root, summary_path)
+        local ts = module.required["core.integrations.treesitter"]
+        local ws_norm = vim.fs.normalize(tostring(ws_root))
+        local categorized = {}
+        local category_order = {}
+
+        for _, file in ipairs(files) do
+            local abs_path = vim.fs.normalize(tostring(file))
+
+            -- Skip the summary file itself
+            if abs_path == summary_path then
+                goto continue
+            end
+
+            local metadata = ts.get_document_metadata(abs_path) or {}
+
+            -- Path relative to workspace root, without .norg extension, used in links.
+            -- The leading "/" is intentional: combined with the "$" workspace anchor it
+            -- produces links of the form {:$/path/to/file:}[Title].
+            local norgname = abs_path:gsub("^" .. vim.pesc(ws_norm), ""):gsub("%.norg$", "")
+
+            -- Fall back to filename when no title is present in metadata
+            local title = (metadata.title ~= vim.NIL and metadata.title ~= "")
+                    and metadata.title
+                or vim.fs.basename(abs_path):gsub("%.norg$", "")
+
+            local description = (metadata.description ~= vim.NIL) and metadata.description
+
+            local cats = metadata.categories
+            if not cats or cats == vim.NIL then
+                cats = { "Uncategorized" }
+            elseif type(cats) ~= "table" then
+                cats = { tostring(cats) }
+            end
+
+            local entry = { title = title, norgname = norgname, description = description }
+
+            for _, cat in ipairs(cats) do
+                if not categorized[cat] then
+                    categorized[cat] = {}
+                    table.insert(category_order, cat)
+                end
+                table.insert(categorized[cat], entry)
+            end
+
+            ::continue::
+        end
+
+        local result = {}
+
+        for _, category in ipairs(category_order) do
+            table.insert(result, "** " .. category)
+            for _, entry in ipairs(categorized[category]) do
+                local line = "- {:$" .. entry.norgname .. ":}[" .. entry.title .. "]"
+                if entry.description and entry.description ~= "" then
+                    line = line .. " - " .. entry.description
+                end
+                table.insert(result, line)
+            end
+        end
+
+        return result
+    end,
 }
 
 module.on_event = function(event)
