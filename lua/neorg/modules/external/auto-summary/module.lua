@@ -478,7 +478,7 @@ module.private = {
         local result = { string.rep("*", heading_level) .. " Index" }
 
         local child_heading_level = 2
-        local child_indent = string.rep(" ", child_heading_level + 2)
+        local child_indent = string.rep(" ", child_heading_level + 1)
         local sorted_children = vim.list_extend({}, tree.child_order)
         module.private.sort_strings(sorted_children)
 
@@ -519,7 +519,7 @@ module.private = {
         module.private.sort_strings(sorted_children)
         for _, child_name in ipairs(sorted_children) do
             local child = node.children[child_name]
-            local indent = string.rep(" ", heading_level + 2)
+            local indent = string.rep(" ", heading_level + 1)
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
@@ -550,12 +550,12 @@ module.private = {
         local function generate_node(node, node_name, path_parts)
             local rel_path = module.private.get_category_rel_path(path_parts, node)
             local heading_level = 1
-            local indent = string.rep(" ", heading_level + 2)
+            local indent = string.rep(" ", heading_level + 1)
             local lines = { string.rep("*", heading_level) .. " " .. node_name }
 
             if module.private.has_children(node) then
                 local child_heading_level = 2
-                local child_indent = string.rep(" ", child_heading_level + 2)
+                local child_indent = string.rep(" ", child_heading_level + 1)
                 local sorted_children = vim.list_extend({}, node.child_order)
                 module.private.sort_strings(sorted_children)
 
