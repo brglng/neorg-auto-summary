@@ -125,6 +125,16 @@ module.public = {
                 return
             end
             local ws_norm = vim.fs.normalize(tostring(ws_root))
+
+            -- Skip if workspace directory doesn't exist on disk yet (e.g. during
+            -- module loading when summary_on_launch fires before the directory is
+            -- created).
+            if vim.fn.isdirectory(ws_norm) ~= 1 then
+                module.private._running[ws_name] = nil
+                running_key = nil
+                return
+            end
+
             local config = module.config.public
             local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
 
@@ -200,16 +210,17 @@ module.public = {
                     table.insert(files_to_write, { path = abs_path, content = content })
                 end
 
-                -- Clear re-entrancy guard before async writes: the expensive computation
-                -- is complete, and clearing here avoids a stuck guard if writes fail.
-                module.private._running[ws_name] = nil
-                running_key = nil
-
-                -- Write all files asynchronously
-                module.private.write_files_async(files_to_write, function()
-                    vim.schedule(function()
-                        utils.notify("Summary generated at " .. summary_path)
-                    end)
+                -- Write all files asynchronously; clear re-entrancy guard in the
+                -- callback so a concurrent auto_summary call cannot delete the
+                -- categories directory while writes are still in progress.
+                module.private.write_files_async(files_to_write, function(had_errors)
+                    module.private._running[ws_name] = nil
+                    running_key = nil
+                    if not had_errors then
+                        vim.schedule(function()
+                            utils.notify("Summary generated at " .. summary_path)
+                        end)
+                    end
                 end)
             else
                 -- Generate main summary with tree sub-headings
@@ -231,13 +242,12 @@ module.public = {
 
                 module.private.yield_to_ui()
 
-                -- Clear re-entrancy guard before async write: the expensive computation
-                -- is complete, and clearing here avoids a stuck guard if the write fails.
-                module.private._running[ws_name] = nil
-                running_key = nil
-
-                -- Write single file
+                -- Write single file; clear re-entrancy guard in the callback so a
+                -- concurrent auto_summary call cannot interfere while the write is
+                -- still in progress.
                 module.private.write_file_async(summary_path, content, function(err)
+                    module.private._running[ws_name] = nil
+                    running_key = nil
                     vim.schedule(function()
                         if err then
                             utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
@@ -940,9 +950,10 @@ module.private = {
     end,
 
     --- Write multiple files asynchronously, calling on_done when all complete.
+    --- on_done(had_errors) is always called; had_errors is true when any write failed.
     write_files_async = function(files, on_done)
         if #files == 0 then
-            on_done()
+            on_done(false)
             return
         end
 
@@ -960,9 +971,8 @@ module.private = {
                         vim.schedule(function()
                             utils.notify("Errors writing files:\n" .. table.concat(errors, "\n"), vim.log.levels.ERROR)
                         end)
-                    else
-                        on_done()
                     end
+                    on_done(#errors > 0)
                 end
             end)
         end
