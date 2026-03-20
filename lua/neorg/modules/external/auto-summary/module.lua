@@ -93,132 +93,202 @@ module.public = {
     --- Generate the auto-summary for a workspace.
     --- @param ws_name string|nil workspace name; defaults to the current workspace
     auto_summary = function(ws_name)
-        local dirman = modules.get_module("core.dirman")
+        local running_key
+        module.private.run_async(function()
+            local dirman = modules.get_module("core.dirman")
 
-        if not dirman then
-            utils.notify("`core.dirman` is not loaded! It is required to generate summaries", vim.log.levels.ERROR)
-            return
-        end
-
-        if type(ws_name) == "table" then
-            ws_name = ws_name[1]
-        end
-
-        if not ws_name then
-            ws_name = dirman.get_current_workspace()[1]
-        end
-
-        local ws_root = dirman.get_workspace(ws_name)
-        if not ws_root then
-            utils.notify("Workspace '" .. ws_name .. "' not found", vim.log.levels.ERROR)
-            return
-        end
-        local ws_norm = vim.fs.normalize(tostring(ws_root))
-        local config = module.config.public
-        local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
-
-        local cats_dir_abs = nil
-        if config.per_category_summary then
-            cats_dir_abs = vim.fs.normalize(vim.fn.resolve(ws_norm .. "/" .. config.categories_dir))
-        end
-
-        -- Collect entries from all norg files
-        local categorized, category_order =
-            module.private.collect_entries(dirman.get_norg_files(ws_name) or {}, ws_norm, summary_path, cats_dir_abs)
-
-        -- Build category tree
-        local tree = module.private.build_category_tree(categorized, category_order, config.category_separator)
-
-        if config.per_category_summary then
-            -- Generate main summary with links to category files
-            local main_lines = module.private.generate_main_summary_with_files(tree)
-
-            -- Generate all category file contents (relative paths -> body content)
-            local category_files = module.private.generate_all_category_files(tree)
-
-            local main_body = table.concat(main_lines, "\n") .. "\n"
-
-            -- Prepare content with metadata handling (BEFORE deleting categories dir)
-            local files_to_write = {}
-
-            -- Main summary
-            local main_content
-            if config.inject_metadata then
-                main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
-            else
-                local main_metadata = module.private.read_existing_metadata(summary_path)
-                module.private.close_file_buffers(summary_path)
-                main_content = main_body
-                if main_metadata then
-                    main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
-                end
+            if not dirman then
+                utils.notify("`core.dirman` is not loaded! It is required to generate summaries", vim.log.levels.ERROR)
+                return
             end
-            table.insert(files_to_write, { path = summary_path, content = main_content })
 
-            -- Category files (read old data BEFORE directory deletion)
-            local category_contents = {}
-            for rel_path, body in pairs(category_files) do
-                local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
+            if type(ws_name) == "table" then
+                ws_name = ws_name[1]
+            end
+
+            if not ws_name then
+                ws_name = dirman.get_current_workspace()[1]
+            end
+
+            -- Re-entrancy guard: skip if already running for this workspace
+            if module.private._running[ws_name] then
+                return
+            end
+            module.private._running[ws_name] = true
+            running_key = ws_name
+
+            local ws_root = dirman.get_workspace(ws_name)
+            if not ws_root then
+                module.private._running[ws_name] = nil
+                running_key = nil
+                utils.notify("Workspace '" .. ws_name .. "' not found", vim.log.levels.ERROR)
+                return
+            end
+            local ws_norm = vim.fs.normalize(tostring(ws_root))
+            local config = module.config.public
+            local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
+
+            local cats_dir_abs = nil
+            if config.per_category_summary then
+                cats_dir_abs = vim.fs.normalize(vim.fn.resolve(ws_norm .. "/" .. config.categories_dir))
+            end
+
+            -- Collect entries from all norg files (yields to UI between files)
+            local categorized, category_order = module.private.collect_entries(
+                dirman.get_norg_files(ws_name) or {},
+                ws_norm,
+                summary_path,
+                cats_dir_abs
+            )
+
+            module.private.yield_to_ui()
+
+            -- Build category tree
+            local tree = module.private.build_category_tree(categorized, category_order, config.category_separator)
+
+            if config.per_category_summary then
+                -- Generate main summary with links to category files
+                local main_lines = module.private.generate_main_summary_with_files(tree)
+
+                -- Generate all category file contents (relative paths -> body content)
+                local category_files = module.private.generate_all_category_files(tree)
+
+                local main_body = table.concat(main_lines, "\n") .. "\n"
+
+                -- Prepare content with metadata handling (BEFORE deleting categories dir)
+                local files_to_write = {}
+
+                -- Main summary
+                local main_content
                 if config.inject_metadata then
-                    local cat_title = body:match("^%*+ ([^\n]+)") or vim.fn.fnamemodify(rel_path, ":t:r")
-                    category_contents[abs_path] =
-                        module.private.prepare_content_with_metadata(abs_path, body, cat_title)
+                    main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
                 else
-                    category_contents[abs_path] = body
-                end
-            end
-
-            -- Now safe to delete categories directory
-            if cats_dir_abs and vim.fn.isdirectory(cats_dir_abs) == 1 then
-                vim.fn.delete(cats_dir_abs, "rf")
-            end
-
-            -- Create directories and prepare file entries
-            for abs_path, content in pairs(category_contents) do
-                local dir = vim.fn.fnamemodify(abs_path, ":h")
-                vim.fn.mkdir(dir, "p")
-                table.insert(files_to_write, { path = abs_path, content = content })
-            end
-
-            -- Write all files asynchronously
-            module.private.write_files_async(files_to_write, function()
-                vim.schedule(function()
-                    utils.notify("Summary generated at " .. summary_path)
-                end)
-            end)
-        else
-            -- Generate main summary with tree sub-headings
-            local main_lines = vim.list_extend({ "* Index" }, module.private.generate_tree_lines(tree, 2))
-            local main_body = table.concat(main_lines, "\n") .. "\n"
-
-            -- Handle metadata
-            local content
-            if config.inject_metadata then
-                content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
-            else
-                local metadata = module.private.read_existing_metadata(summary_path)
-                module.private.close_file_buffers(summary_path)
-                content = main_body
-                if metadata then
-                    content = table.concat(metadata, "\n") .. "\n\n" .. content
-                end
-            end
-
-            -- Write single file
-            module.private.write_file_async(summary_path, content, function(err)
-                vim.schedule(function()
-                    if err then
-                        utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
-                    else
-                        utils.notify("Summary generated at " .. summary_path)
+                    local main_metadata = module.private.read_existing_metadata(summary_path)
+                    module.private.close_file_buffers(summary_path)
+                    main_content = main_body
+                    if main_metadata then
+                        main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
                     end
+                end
+                table.insert(files_to_write, { path = summary_path, content = main_content })
+
+                module.private.yield_to_ui()
+
+                -- Category files (read old data BEFORE directory deletion)
+                local category_contents = {}
+                for rel_path, body in pairs(category_files) do
+                    local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
+                    if config.inject_metadata then
+                        local cat_title = body:match("^%*+ ([^\n]+)") or vim.fn.fnamemodify(rel_path, ":t:r")
+                        category_contents[abs_path] =
+                            module.private.prepare_content_with_metadata(abs_path, body, cat_title)
+                    else
+                        category_contents[abs_path] = body
+                    end
+                    module.private.yield_to_ui()
+                end
+
+                -- Now safe to delete categories directory
+                if cats_dir_abs and vim.fn.isdirectory(cats_dir_abs) == 1 then
+                    vim.fn.delete(cats_dir_abs, "rf")
+                end
+
+                -- Create directories and prepare file entries
+                for abs_path, content in pairs(category_contents) do
+                    local dir = vim.fn.fnamemodify(abs_path, ":h")
+                    vim.fn.mkdir(dir, "p")
+                    table.insert(files_to_write, { path = abs_path, content = content })
+                end
+
+                module.private._running[ws_name] = nil
+                running_key = nil
+
+                -- Write all files asynchronously
+                module.private.write_files_async(files_to_write, function()
+                    vim.schedule(function()
+                        utils.notify("Summary generated at " .. summary_path)
+                    end)
                 end)
-            end)
-        end
+            else
+                -- Generate main summary with tree sub-headings
+                local main_lines = vim.list_extend({ "* Index" }, module.private.generate_tree_lines(tree, 2))
+                local main_body = table.concat(main_lines, "\n") .. "\n"
+
+                -- Handle metadata
+                local content
+                if config.inject_metadata then
+                    content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
+                else
+                    local metadata = module.private.read_existing_metadata(summary_path)
+                    module.private.close_file_buffers(summary_path)
+                    content = main_body
+                    if metadata then
+                        content = table.concat(metadata, "\n") .. "\n\n" .. content
+                    end
+                end
+
+                module.private.yield_to_ui()
+
+                module.private._running[ws_name] = nil
+                running_key = nil
+
+                -- Write single file
+                module.private.write_file_async(summary_path, content, function(err)
+                    vim.schedule(function()
+                        if err then
+                            utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
+                        else
+                            utils.notify("Summary generated at " .. summary_path)
+                        end
+                    end)
+                end)
+            end
+        end, function()
+            if running_key then
+                module.private._running[running_key] = nil
+            end
+        end)
     end,
 }
 
 module.private = {
+    --- Map of workspace names currently being summarized, for re-entrancy guard.
+    _running = {},
+
+    --- Run a function as a coroutine, yielding to the event loop periodically.
+    --- The coroutine can call yield_to_ui() to let the UI process events.
+    --- @param fn function the function to run asynchronously
+    --- @param cleanup function|nil optional cleanup called on error
+    run_async = function(fn, cleanup)
+        local co = coroutine.create(fn)
+        local function step()
+            if coroutine.status(co) == "dead" then
+                return
+            end
+            local ok, err = coroutine.resume(co)
+            if not ok then
+                if cleanup then
+                    cleanup()
+                end
+                utils.notify("Auto-summary error: " .. tostring(err), vim.log.levels.ERROR)
+            end
+        end
+        step()
+    end,
+
+    --- Yield to the event loop to avoid blocking the UI.
+    --- Safe to call outside of a coroutine (becomes a no-op).
+    yield_to_ui = function()
+        local co = coroutine.running()
+        if not co then
+            return
+        end
+        vim.schedule(function()
+            coroutine.resume(co)
+        end)
+        coroutine.yield()
+    end,
+
     --- Find the workspace that contains the given file path.
     --- @param filepath string normalized absolute file path
     --- @return string|nil workspace name or nil if not found
@@ -335,6 +405,8 @@ module.private = {
                 end
                 table.insert(categorized[cat], entry)
             end
+
+            module.private.yield_to_ui()
 
             ::continue::
         end
