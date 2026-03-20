@@ -206,11 +206,8 @@ module.public = {
                 -- Create directories and prepare file entries
                 for abs_path, content in pairs(category_contents) do
                     local dir = vim.fn.fnamemodify(abs_path, ":h")
-                    if vim.fn.mkdir(dir, "p") == 0 then
-                        utils.notify("Failed to create directory: " .. dir, vim.log.levels.WARN)
-                    else
-                        table.insert(files_to_write, { path = abs_path, content = content })
-                    end
+                    vim.fn.mkdir(dir, "p")
+                    table.insert(files_to_write, { path = abs_path, content = content })
                 end
 
                 -- Write all files asynchronously; clear re-entrancy guard in the
@@ -370,29 +367,21 @@ module.private = {
                 goto continue
             end
 
-            -- get_document_metadata requires a bufnr, so open a hidden buffer.
-            -- Wrap in pcall to gracefully skip files that can't be loaded or
-            -- parsed (e.g. treesitter parser not ready during early startup).
+            -- get_document_metadata requires a bufnr, so open a hidden buffer
             local bufnr = vim.fn.bufnr(abs_path)
             local created_buf = false
             if bufnr == -1 then
                 bufnr = vim.fn.bufadd(abs_path)
                 created_buf = true
             end
+            if not vim.api.nvim_buf_is_loaded(bufnr) then
+                vim.fn.bufload(bufnr)
+            end
 
-            local ok, metadata = pcall(function()
-                if not vim.api.nvim_buf_is_loaded(bufnr) then
-                    vim.fn.bufload(bufnr)
-                end
-                return ts.get_document_metadata(bufnr) or {}
-            end)
+            local metadata = ts.get_document_metadata(bufnr) or {}
 
             if created_buf then
                 module.private.safe_buf_delete(bufnr)
-            end
-
-            if not ok then
-                goto continue
             end
 
             -- Path relative to workspace root, without .norg extension, used in links.
@@ -943,7 +932,7 @@ module.private = {
         -- 438 is octal 0666 (rw-rw-rw-), the standard permission for new files
         vim.uv.fs_open(path, "w", 438, function(open_err, fd)
             if open_err then
-                callback("Failed to open " .. path .. ": " .. open_err)
+                callback("Failed to open " .. path .. ": " .. open_err, vim.log.levels.ERROR)
                 return
             end
             vim.uv.fs_write(fd, content, nil, function(write_err, _)
