@@ -200,6 +200,8 @@ module.public = {
                     table.insert(files_to_write, { path = abs_path, content = content })
                 end
 
+                -- Clear re-entrancy guard before async writes: the expensive computation
+                -- is complete, and clearing here avoids a stuck guard if writes fail.
                 module.private._running[ws_name] = nil
                 running_key = nil
 
@@ -229,6 +231,8 @@ module.public = {
 
                 module.private.yield_to_ui()
 
+                -- Clear re-entrancy guard before async write: the expensive computation
+                -- is complete, and clearing here avoids a stuck guard if the write fails.
                 module.private._running[ws_name] = nil
                 running_key = nil
 
@@ -255,6 +259,9 @@ module.private = {
     --- Map of workspace names currently being summarized, for re-entrancy guard.
     _running = {},
 
+    --- Map of coroutine -> step function, used by yield_to_ui to resume with error handling.
+    _step_fns = {},
+
     --- Run a function as a coroutine, yielding to the event loop periodically.
     --- The coroutine can call yield_to_ui() to let the UI process events.
     --- @param fn function the function to run asynchronously
@@ -263,16 +270,19 @@ module.private = {
         local co = coroutine.create(fn)
         local function step()
             if coroutine.status(co) == "dead" then
+                module.private._step_fns[co] = nil
                 return
             end
             local ok, err = coroutine.resume(co)
             if not ok then
+                module.private._step_fns[co] = nil
                 if cleanup then
                     cleanup()
                 end
                 utils.notify("Auto-summary error: " .. tostring(err), vim.log.levels.ERROR)
             end
         end
+        module.private._step_fns[co] = step
         step()
     end,
 
@@ -283,9 +293,14 @@ module.private = {
         if not co then
             return
         end
-        vim.schedule(function()
-            coroutine.resume(co)
-        end)
+        local step = module.private._step_fns[co]
+        if step then
+            vim.schedule(step)
+        else
+            vim.schedule(function()
+                coroutine.resume(co)
+            end)
+        end
         coroutine.yield()
     end,
 
