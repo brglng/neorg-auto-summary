@@ -555,14 +555,14 @@ module.private = {
         return result
     end,
 
-    --- Sort a list of strings alphabetically, respecting sort_direction.
+    --- Sort a list of strings alphabetically (case-insensitive), respecting sort_direction.
     sort_strings = function(list)
         local ascending = module.config.public.sort_direction == "ascending"
         table.sort(list, function(a, b)
             if ascending then
-                return a < b
+                return a:lower() < b:lower()
             else
-                return a > b
+                return a:lower() > b:lower()
             end
         end)
     end,
