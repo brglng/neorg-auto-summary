@@ -922,7 +922,7 @@ module.private = {
         -- 438 is octal 0666 (rw-rw-rw-), the standard permission for new files
         vim.uv.fs_open(path, "w", 438, function(open_err, fd)
             if open_err then
-                callback("Failed to open " .. path .. ": " .. open_err)
+                callback("Failed to open " .. path .. ": " .. open_err, vim.log.levels.ERROR)
                 return
             end
             vim.uv.fs_write(fd, content, nil, function(write_err, _)
@@ -958,7 +958,7 @@ module.private = {
                 if completed == #files then
                     if #errors > 0 then
                         vim.schedule(function()
-                            utils.notify("Errors writing files:\n" .. table.concat(errors, "\n"))
+                            utils.notify("Errors writing files:\n" .. table.concat(errors, "\n"), vim.log.levels.ERROR)
                         end)
                     else
                         on_done()
