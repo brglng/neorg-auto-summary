@@ -835,7 +835,7 @@ module.private = {
         -- 438 is octal 0666 (rw-rw-rw-), the standard permission for new files
         vim.uv.fs_open(path, "w", 438, function(open_err, fd)
             if open_err then
-                callback("Failed to open " .. path .. ": " .. open_err, vim.log.levels.ERROR)
+                callback("Failed to open " .. path .. ": " .. open_err)
                 return
             end
             vim.uv.fs_write(fd, content, nil, function(write_err, _)
