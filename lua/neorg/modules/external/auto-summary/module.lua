@@ -96,7 +96,7 @@ module.public = {
         local dirman = modules.get_module("core.dirman")
 
         if not dirman then
-            utils.notify("`core.dirman` is not loaded! It is required to generate summaries")
+            utils.notify("`core.dirman` is not loaded! It is required to generate summaries", vim.log.levels.ERROR)
             return
         end
 
@@ -110,7 +110,7 @@ module.public = {
 
         local ws_root = dirman.get_workspace(ws_name)
         if not ws_root then
-            utils.notify("Workspace '" .. ws_name .. "' not found")
+            utils.notify("Workspace '" .. ws_name .. "' not found", vim.log.levels.ERROR)
             return
         end
         local ws_norm = vim.fs.normalize(tostring(ws_root))
@@ -208,7 +208,7 @@ module.public = {
             module.private.write_file_async(summary_path, content, function(err)
                 vim.schedule(function()
                     if err then
-                        utils.notify("Failed to write summary file: " .. err)
+                        utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
                     else
                         utils.notify("Summary generated at " .. summary_path)
                     end
@@ -468,14 +468,14 @@ module.private = {
         return result
     end,
 
-    --- Sort a list of strings alphabetically (case-insensitive), respecting sort_direction.
+    --- Sort a list of strings alphabetically, respecting sort_direction.
     sort_strings = function(list)
         local ascending = module.config.public.sort_direction == "ascending"
         table.sort(list, function(a, b)
             if ascending then
-                return a:lower() < b:lower()
+                return a < b
             else
-                return a:lower() > b:lower()
+                return a > b
             end
         end)
     end,
