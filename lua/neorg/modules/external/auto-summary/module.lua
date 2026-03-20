@@ -414,13 +414,13 @@ module.private = {
         return "/" .. rel_path:gsub("%.norg$", "")
     end,
 
-    --- Format a list of entries as indented link lines.
-    format_entry_lines = function(entries, indent)
+    --- Format a list of entries as heading link lines.
+    format_entry_lines = function(entries, heading_level)
         local config = module.config.public
         local lines = {}
         for _, entry in ipairs(entries) do
             local display_title = config.format_note_title(entry.metadata)
-            local line = indent .. "- {:$" .. entry.norgname .. ":}[" .. display_title .. "]"
+            local line = string.rep("*", heading_level) .. " {:$" .. entry.norgname .. ":}[" .. display_title .. "]"
             if entry.description and entry.description ~= "" then
                 line = line .. " - " .. entry.description
             end
@@ -506,9 +506,8 @@ module.private = {
             local all_entries = module.private.deduplicate_entries(module.private.collect_all_entries(tree))
             module.private.sort_entries(all_entries)
             if #all_entries > 0 then
-                local notes_indent = string.rep(" ", heading_level + 1)
                 table.insert(result, string.rep("*", heading_level) .. " Notes")
-                vim.list_extend(result, module.private.format_entry_lines(all_entries, notes_indent))
+                vim.list_extend(result, module.private.format_entry_lines(all_entries, heading_level + 1))
             end
         end
 
@@ -526,19 +525,18 @@ module.private = {
         module.private.sort_strings(sorted_children)
         for _, child_name in ipairs(sorted_children) do
             local child = node.children[child_name]
-            local indent = string.rep(" ", heading_level + 1)
 
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
             if config.list_subcategory_notes then
                 local entries = module.private.deduplicate_entries(module.private.collect_all_entries(child))
                 module.private.sort_entries(entries)
-                vim.list_extend(result, module.private.format_entry_lines(entries, indent))
+                vim.list_extend(result, module.private.format_entry_lines(entries, heading_level + 1))
             else
                 -- Only direct entries, no nested sub-category headings
                 local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
                 module.private.sort_entries(entries)
-                vim.list_extend(result, module.private.format_entry_lines(entries, indent))
+                vim.list_extend(result, module.private.format_entry_lines(entries, heading_level + 1))
             end
         end
         return result
@@ -553,7 +551,6 @@ module.private = {
         local function generate_node(node, node_name, path_parts)
             local rel_path = module.private.get_category_rel_path(path_parts, node)
             local heading_level = 1
-            local indent = string.rep(" ", heading_level + 1)
             local lines = { string.rep("*", heading_level) .. " " .. node_name }
 
             if module.private.has_children(node) then
@@ -579,7 +576,7 @@ module.private = {
                     module.private.sort_entries(all_entries)
                     if #all_entries > 0 then
                         table.insert(lines, string.rep("*", heading_level) .. " Notes")
-                        vim.list_extend(lines, module.private.format_entry_lines(all_entries, indent))
+                        vim.list_extend(lines, module.private.format_entry_lines(all_entries, heading_level + 1))
                     end
                 else
                     -- Headings linking to child files
@@ -598,7 +595,7 @@ module.private = {
                     -- Only direct entries
                     local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                     module.private.sort_entries(entries)
-                    local entry_lines = module.private.format_entry_lines(entries, indent)
+                    local entry_lines = module.private.format_entry_lines(entries, heading_level + 1)
 
                     vim.list_extend(lines, entry_lines)
                     vim.list_extend(lines, heading_lines)
@@ -607,7 +604,7 @@ module.private = {
                 -- Leaf node: list direct entries, sorted and deduplicated
                 local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                 module.private.sort_entries(entries)
-                vim.list_extend(lines, module.private.format_entry_lines(entries, indent))
+                vim.list_extend(lines, module.private.format_entry_lines(entries, heading_level + 1))
             end
 
             files[rel_path] = table.concat(lines, "\n") .. "\n"
