@@ -256,24 +256,44 @@ module.private = {
     --- newly opened buffer so the user sees the refreshed content.
     --- @param paths string[] list of absolute file paths that were written
     reopen_file_buffers = function(paths)
-        for _, path in ipairs(paths) do
-            local old_bufnr = vim.fn.bufnr(path)
-            if old_bufnr ~= -1 and vim.api.nvim_buf_is_valid(old_bufnr) then
-                -- Remember which windows were displaying this buffer
-                local win_ids = vim.fn.win_findbuf(old_bufnr)
+        -- Build a set of resolved target paths for reliable comparison.
+        -- vim.fn.resolve() canonicalises symlinks so that buffers opened
+        -- through a different symlink path still match.
+        local target_set = {}
+        for _, p in ipairs(paths) do
+            target_set[vim.fs.normalize(vim.fn.resolve(p))] = true
+        end
 
-                -- Close the old buffer
-                module.private.safe_buf_delete(old_bufnr)
-
-                -- Re-open the file into a new buffer
-                local new_bufnr = vim.fn.bufadd(path)
-                vim.fn.bufload(new_bufnr)
-
-                -- Restore windows that were showing the old buffer
-                for _, win_id in ipairs(win_ids) do
-                    if vim.api.nvim_win_is_valid(win_id) then
-                        vim.api.nvim_win_set_buf(win_id, new_bufnr)
+        -- Scan all buffers and collect the ones whose resolved name matches
+        -- a target path.  We collect first, then mutate, to avoid changing
+        -- the buffer list while iterating over it.
+        local to_reopen = {}
+        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(bufnr) then
+                local buf_name = vim.api.nvim_buf_get_name(bufnr)
+                if buf_name ~= "" then
+                    local resolved = vim.fs.normalize(vim.fn.resolve(buf_name))
+                    if target_set[resolved] then
+                        table.insert(to_reopen, {
+                            bufnr = bufnr,
+                            path = resolved,
+                            win_ids = vim.fn.win_findbuf(bufnr),
+                        })
                     end
+                end
+            end
+        end
+
+        -- Delete old buffers, create fresh ones from disk, and restore windows.
+        for _, info in ipairs(to_reopen) do
+            module.private.safe_buf_delete(info.bufnr)
+
+            local new_bufnr = vim.fn.bufadd(info.path)
+            vim.fn.bufload(new_bufnr)
+
+            for _, win_id in ipairs(info.win_ids) do
+                if vim.api.nvim_win_is_valid(win_id) then
+                    vim.api.nvim_win_set_buf(win_id, new_bufnr)
                 end
             end
         end
