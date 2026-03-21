@@ -513,15 +513,11 @@ module.private = {
         return result
     end,
 
-    --- Sort a list of strings alphabetically (case-insensitive), respecting sort_direction.
+    --- Sort a list of strings alphabetically (case-insensitive, always ascending).
+    --- Categories are always sorted alphabetically regardless of sort_by/sort_direction.
     sort_strings = function(list)
-        local ascending = module.config.public.sort_direction == "ascending"
         table.sort(list, function(a, b)
-            if ascending then
-                return a:lower() < b:lower()
-            else
-                return a:lower() > b:lower()
-            end
+            return a:lower() < b:lower()
         end)
     end,
 
@@ -560,28 +556,26 @@ module.private = {
     end,
 
     --- Generate tree lines for inline mode (per_category_summary is false).
-    --- When list_subcategory_notes is true, all descendant entries are listed
-    --- under each heading (no sub-headings). When false, only the direct entries
-    --- of each child are listed (no nested sub-category headings).
+    --- Recursively generates the full category tree with notes listed under
+    --- their corresponding subcategory (not flattened). No "Notes" heading.
     generate_tree_lines = function(node, heading_level)
-        local config = module.config.public
         local result = {}
         local sorted_children = vim.list_extend({}, node.child_order)
         module.private.sort_strings(sorted_children)
         for _, child_name in ipairs(sorted_children) do
             local child = node.children[child_name]
 
+            -- Category heading
             table.insert(result, string.rep("*", heading_level) .. " " .. child_name)
 
-            if config.list_subcategory_notes then
-                local entries = module.private.deduplicate_entries(module.private.collect_all_entries(child))
-                module.private.sort_entries(entries)
-                vim.list_extend(result, module.private.format_entry_lines(entries, heading_level + 1))
-            else
-                -- Only direct entries, no nested sub-category headings
-                local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
-                module.private.sort_entries(entries)
-                vim.list_extend(result, module.private.format_entry_lines(entries, heading_level + 1))
+            -- Direct entries of this category
+            local entries = module.private.deduplicate_entries(vim.list_extend({}, child.entries))
+            module.private.sort_entries(entries)
+            vim.list_extend(result, module.private.format_entry_lines(entries, heading_level + 1))
+
+            -- Recurse into subcategories
+            if module.private.has_children(child) then
+                vim.list_extend(result, module.private.generate_tree_lines(child, heading_level + 1))
             end
         end
         return result
