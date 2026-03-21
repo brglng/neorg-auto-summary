@@ -699,7 +699,7 @@ module.private = {
             end
             vim.list_extend(lines, {
                 "",
-                string.rep("*", heading_level) .. " {:$" .. parent_norgname .. ":}[<- " .. parent_name .. "]",
+                string.rep("*", heading_level) .. " {:$" .. parent_norgname .. ":}[󰜱  " .. parent_name .. "]",
             })
 
             files[rel_path] = table.concat(lines, "\n") .. "\n"
