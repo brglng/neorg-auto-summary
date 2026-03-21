@@ -147,7 +147,6 @@ module.public = {
                 main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local main_metadata = module.private.read_existing_metadata(summary_path)
-                module.private.close_file_buffers(summary_path)
                 main_content = main_body
                 if main_metadata then
                     main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
@@ -183,6 +182,7 @@ module.public = {
             -- Write all files asynchronously
             module.private.write_files_async(files_to_write, function()
                 vim.schedule(function()
+                    vim.cmd("checktime")
                     utils.notify("Summary generated at " .. summary_path)
                 end)
             end)
@@ -197,7 +197,6 @@ module.public = {
                 content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local metadata = module.private.read_existing_metadata(summary_path)
-                module.private.close_file_buffers(summary_path)
                 content = main_body
                 if metadata then
                     content = table.concat(metadata, "\n") .. "\n\n" .. content
@@ -210,6 +209,7 @@ module.public = {
                     if err then
                         utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
                     else
+                        vim.cmd("checktime")
                         utils.notify("Summary generated at " .. summary_path)
                     end
                 end)
@@ -247,6 +247,56 @@ module.private = {
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end,
 
+    --- Read entire file contents using vim.uv (synchronous).
+    --- @param path string absolute file path
+    --- @return string|nil file contents or nil on error
+    read_file_contents = function(path)
+        local stat = vim.uv.fs_stat(path)
+        if not stat then
+            return nil
+        end
+        -- 438 is octal 0666 (rw-rw-rw-), the standard permission for files
+        local fd = vim.uv.fs_open(path, "r", 438)
+        if not fd then
+            return nil
+        end
+        local data = vim.uv.fs_read(fd, stat.size, 0)
+        vim.uv.fs_close(fd)
+        return data
+    end,
+
+    --- Get a buffer suitable for treesitter operations on a file.
+    --- If the buffer is already open and loaded, returns it directly.
+    --- Otherwise, reads the file with vim.uv and creates a hidden scratch buffer
+    --- with the content for treesitter parsing.
+    --- @param abs_path string absolute file path
+    --- @return number|nil bufnr buffer number, or nil if file can't be read
+    --- @return boolean created_scratch true if a scratch buffer was created (caller should delete it)
+    get_or_create_treesitter_buffer = function(abs_path)
+        local bufnr = vim.fn.bufnr(abs_path)
+        if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+            -- Verify the buffer actually corresponds to the requested file
+            local buf_name = vim.fs.normalize(vim.fs.abspath(vim.api.nvim_buf_get_name(bufnr)))
+            if buf_name == abs_path then
+                return bufnr, false
+            end
+        end
+
+        -- Read file contents with vim.uv
+        local content = module.private.read_file_contents(abs_path)
+        if not content then
+            return nil, false
+        end
+
+        -- Create scratch buffer with file content
+        local scratch = vim.api.nvim_create_buf(false, true)
+        local lines = vim.split(content, "\n", { plain = true })
+        vim.api.nvim_buf_set_lines(scratch, 0, -1, false, lines)
+        vim.bo[scratch].filetype = "norg"
+
+        return scratch, true
+    end,
+
     --- Collect entries from norg files, grouped by category.
     --- @param files string[] list of absolute file paths
     --- @param ws_norm string normalized workspace root
@@ -272,20 +322,15 @@ module.private = {
                 goto continue
             end
 
-            -- get_document_metadata requires a bufnr, so open a hidden buffer
-            local bufnr = vim.fn.bufnr(abs_path)
-            local created_buf = false
-            if bufnr == -1 then
-                bufnr = vim.fn.bufadd(abs_path)
-                created_buf = true
-            end
-            if not vim.api.nvim_buf_is_loaded(bufnr) then
-                vim.fn.bufload(bufnr)
+            -- Get a buffer for treesitter (existing or scratch)
+            local bufnr, created_scratch = module.private.get_or_create_treesitter_buffer(abs_path)
+            if not bufnr then
+                goto continue
             end
 
             local metadata = ts.get_document_metadata(bufnr) or {}
 
-            if created_buf then
+            if created_scratch then
                 module.private.safe_buf_delete(bufnr)
             end
 
@@ -630,18 +675,9 @@ module.private = {
     read_existing_metadata = function(path)
         local ts = module.required["core.integrations.treesitter"]
 
-        if vim.fn.filereadable(path) ~= 1 then
+        local bufnr, created_scratch = module.private.get_or_create_treesitter_buffer(path)
+        if not bufnr then
             return nil
-        end
-
-        local bufnr = vim.fn.bufnr(path)
-        local created_buf = false
-        if bufnr == -1 then
-            bufnr = vim.fn.bufadd(path)
-            created_buf = true
-        end
-        if not vim.api.nvim_buf_is_loaded(bufnr) then
-            vim.fn.bufload(bufnr)
         end
 
         local query = utils.ts_parse_query(
@@ -675,7 +711,7 @@ module.private = {
             end
         end
 
-        if created_buf then
+        if created_scratch then
             module.private.safe_buf_delete(bufnr)
         end
 
@@ -686,10 +722,11 @@ module.private = {
     --- @param path string absolute file path
     --- @return string|nil body content or nil if file doesn't exist
     read_file_body = function(path)
-        if vim.fn.filereadable(path) ~= 1 then
+        local content = module.private.read_file_contents(path)
+        if not content then
             return nil
         end
-        local lines = vim.fn.readfile(path)
+        local lines = vim.split(content, "\n", { plain = true })
         local in_meta = false
         local body_lines = {}
         local found_meta = false
@@ -786,7 +823,6 @@ module.private = {
     prepare_content_with_metadata = function(path, body, title)
         local old_metadata_lines = module.private.read_existing_metadata(path)
         local old_body = module.private.read_file_body(path)
-        module.private.close_file_buffers(path)
 
         local metadata_lines
         if old_metadata_lines then
@@ -805,17 +841,6 @@ module.private = {
         return table.concat(metadata_lines, "\n") .. "\n\n" .. body
     end,
 
-    --- Close all buffers associated with a file path.
-    close_file_buffers = function(path)
-        for _, b in ipairs(vim.api.nvim_list_bufs()) do
-            if vim.api.nvim_buf_is_valid(b) then
-                local buf_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(b))))
-                if buf_path == path then
-                    module.private.safe_buf_delete(b)
-                end
-            end
-        end
-    end,
 
     --- Write a single file asynchronously.
     --- callback(err) is called on completion; err is nil on success.
