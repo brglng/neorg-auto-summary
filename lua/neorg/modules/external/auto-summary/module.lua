@@ -682,6 +682,26 @@ module.private = {
                 vim.list_extend(lines, module.private.format_entry_lines(entries, heading_level + 1))
             end
 
+            -- Add a heading linking to the parent (one level up)
+            local parent_norgname, parent_name
+            if #path_parts == 1 then
+                -- Top-level category: parent is the main index file
+                parent_norgname = "/" .. config.name:gsub("%.norg$", "")
+                parent_name = config.name:gsub("%.norg$", "")
+            else
+                -- Sub-category: parent is the parent category file
+                local parent_path_parts = {}
+                for i = 1, #path_parts - 1 do
+                    table.insert(parent_path_parts, path_parts[i])
+                end
+                parent_norgname = module.private.get_category_norgname(parent_path_parts, nil)
+                parent_name = path_parts[#path_parts - 1]
+            end
+            vim.list_extend(lines, {
+                "",
+                string.rep("*", heading_level) .. " {:$" .. parent_norgname .. ":}[← " .. parent_name .. "]",
+            })
+
             files[rel_path] = table.concat(lines, "\n") .. "\n"
 
             -- Recurse into children
