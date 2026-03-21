@@ -179,17 +179,25 @@ module.public = {
                 table.insert(files_to_write, { path = abs_path, content = content })
             end
 
-            -- Write all files asynchronously
-            local written_paths = {}
+            -- Write all files, preferring buffer updates for open files
+            local disk_writes = {}
             for _, file_info in ipairs(files_to_write) do
-                table.insert(written_paths, file_info.path)
+                local bufnr = module.private.find_open_buffer(file_info.path)
+                if bufnr then
+                    module.private.write_to_buffer(bufnr, file_info.content)
+                else
+                    table.insert(disk_writes, file_info)
+                end
             end
-            module.private.write_files_async(files_to_write, function()
-                vim.schedule(function()
-                    module.private.reopen_file_buffers(written_paths)
-                    utils.notify("Summary generated at " .. summary_path)
+            if #disk_writes > 0 then
+                module.private.write_files_async(disk_writes, function()
+                    vim.schedule(function()
+                        utils.notify("Summary generated at " .. summary_path)
+                    end)
                 end)
-            end)
+            else
+                utils.notify("Summary generated at " .. summary_path)
+            end
         else
             -- Generate main summary with tree sub-headings
             local main_lines = vim.list_extend({ "* Index", "\n" }, module.private.generate_tree_lines(tree, 2))
@@ -207,17 +215,22 @@ module.public = {
                 end
             end
 
-            -- Write single file
-            module.private.write_file_async(summary_path, content, function(err)
-                vim.schedule(function()
-                    if err then
-                        utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
-                    else
-                        module.private.reopen_file_buffers({ summary_path })
-                        utils.notify("Summary generated at " .. summary_path)
-                    end
+            -- Write single file, preferring buffer update if open
+            local bufnr = module.private.find_open_buffer(summary_path)
+            if bufnr then
+                module.private.write_to_buffer(bufnr, content)
+                utils.notify("Summary generated at " .. summary_path)
+            else
+                module.private.write_file_async(summary_path, content, function(err)
+                    vim.schedule(function()
+                        if err then
+                            utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
+                        else
+                            utils.notify("Summary generated at " .. summary_path)
+                        end
+                    end)
                 end)
-            end)
+            end
         end
     end,
 }
@@ -251,52 +264,39 @@ module.private = {
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end,
 
-    --- Close and re-open buffers for the given file paths.
-    --- If a buffer was displayed in a window, the window is updated to show the
-    --- newly opened buffer so the user sees the refreshed content.
-    --- @param paths string[] list of absolute file paths that were written
-    reopen_file_buffers = function(paths)
-        -- Build a set of resolved target paths for reliable comparison.
-        -- vim.fn.resolve() canonicalises symlinks so that buffers opened
-        -- through a different symlink path still match.
-        local target_set = {}
-        for _, p in ipairs(paths) do
-            target_set[vim.fs.normalize(vim.fn.resolve(p))] = true
-        end
-
-        -- Scan all buffers and collect the ones whose resolved name matches
-        -- a target path.  We collect first, then mutate, to avoid changing
-        -- the buffer list while iterating over it.
-        local to_reopen = {}
+    --- Find an open, loaded buffer for the given file path.
+    --- Uses resolved paths for reliable matching (handles symlinks).
+    --- @param path string absolute file path
+    --- @return number|nil buffer number or nil if not found
+    find_open_buffer = function(path)
+        local resolved = vim.fs.normalize(vim.fn.resolve(path))
         for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-            if vim.api.nvim_buf_is_valid(bufnr) then
+            if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
                 local buf_name = vim.api.nvim_buf_get_name(bufnr)
                 if buf_name ~= "" then
-                    local resolved = vim.fs.normalize(vim.fn.resolve(buf_name))
-                    if target_set[resolved] then
-                        table.insert(to_reopen, {
-                            bufnr = bufnr,
-                            path = resolved,
-                            win_ids = vim.fn.win_findbuf(bufnr),
-                        })
+                    local buf_resolved = vim.fs.normalize(vim.fn.resolve(buf_name))
+                    if buf_resolved == resolved then
+                        return bufnr
                     end
                 end
             end
         end
+        return nil
+    end,
 
-        -- Delete old buffers, create fresh ones from disk, and restore windows.
-        for _, info in ipairs(to_reopen) do
-            module.private.safe_buf_delete(info.bufnr)
-
-            local new_bufnr = vim.fn.bufadd(info.path)
-            vim.fn.bufload(new_bufnr)
-
-            for _, win_id in ipairs(info.win_ids) do
-                if vim.api.nvim_win_is_valid(win_id) then
-                    vim.api.nvim_win_set_buf(win_id, new_bufnr)
-                end
-            end
+    --- Write content to an open buffer and save it.
+    --- @param bufnr number buffer number
+    --- @param content string file content to write
+    write_to_buffer = function(bufnr, content)
+        local lines = vim.split(content, "\n", { plain = true })
+        -- Remove trailing empty string from split when content ends with \n
+        if #lines > 0 and lines[#lines] == "" then
+            table.remove(lines)
         end
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        vim.api.nvim_buf_call(bufnr, function()
+            vim.cmd("silent write")
+        end)
     end,
 
     --- Read entire file contents using vim.uv (synchronous).
@@ -511,6 +511,45 @@ module.private = {
         return "/" .. rel_path:gsub("%.norg$", "")
     end,
 
+    --- Compute relative norgname from one file to another.
+    --- Both paths are relative to the workspace root.
+    --- @param from_rel_path string relative path of the source file (e.g., "index.norg")
+    --- @param to_rel_path string relative path of the target file (e.g., "categories/Programming.norg")
+    --- @return string relative norgname (e.g., "./categories/Programming")
+    get_relative_norgname = function(from_rel_path, to_rel_path)
+        local from_dir = vim.fn.fnamemodify(from_rel_path, ":h")
+        local from_parts = (from_dir == "." or from_dir == "") and {} or vim.split(from_dir, "/", { plain = true })
+        local to_file_parts = vim.split(to_rel_path, "/", { plain = true })
+
+        -- Find common prefix length
+        local common = 0
+        for i = 1, math.min(#from_parts, #to_file_parts) do
+            if from_parts[i] == to_file_parts[i] then
+                common = common + 1
+            else
+                break
+            end
+        end
+
+        -- Build relative path: go up from source dir, then down to target
+        local result_parts = {}
+        for _ = common + 1, #from_parts do
+            table.insert(result_parts, "..")
+        end
+        for i = common + 1, #to_file_parts do
+            table.insert(result_parts, to_file_parts[i])
+        end
+
+        local rel = table.concat(result_parts, "/")
+        rel = rel:gsub("%.norg$", "")
+
+        if not vim.startswith(rel, "..") then
+            rel = "./" .. rel
+        end
+
+        return rel
+    end,
+
     --- Format a list of entries as heading link lines.
     format_entry_lines = function(entries, heading_level)
         local config = module.config.public
@@ -591,10 +630,11 @@ module.private = {
         -- Category headings (no entry lines under them)
         for _, child_name in ipairs(sorted_children) do
             local child = tree.children[child_name]
-            local norgname = module.private.get_category_norgname({ child_name }, child)
+            local child_rel_path = module.private.get_category_rel_path({ child_name }, child)
+            local rel_norgname = module.private.get_relative_norgname(config.name, child_rel_path)
             table.insert(
                 result,
-                string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                string.rep("*", child_heading_level) .. " {:" .. rel_norgname .. ":}[" .. child_name .. "]"
             )
         end
 
@@ -646,10 +686,33 @@ module.private = {
         local function generate_node(node, node_name, path_parts)
             local rel_path = module.private.get_category_rel_path(path_parts, node)
             local heading_level = 1
+            local child_heading_level = heading_level + 1
             local lines = { string.rep("*", heading_level) .. " " .. node_name, "" }
 
+            -- Compute parent link (relative)
+            local parent_rel_path, parent_name
+            if #path_parts == 1 then
+                -- Top-level category: parent is the main index file
+                parent_rel_path = config.name
+                parent_name = config.name:gsub("%.norg$", "")
+            else
+                -- Sub-category: parent is the parent category file
+                local parent_path_parts = {}
+                for i = 1, #path_parts - 1 do
+                    table.insert(parent_path_parts, path_parts[i])
+                end
+                parent_rel_path = module.private.get_category_rel_path(parent_path_parts, nil)
+                parent_name = path_parts[#path_parts - 1]
+            end
+            local parent_rel_norgname = module.private.get_relative_norgname(rel_path, parent_rel_path)
+            local parent_link_line = string.rep("*", child_heading_level)
+                .. " {:"
+                .. parent_rel_norgname
+                .. ":}[󰜱  "
+                .. parent_name
+                .. "]"
+
             if module.private.has_children(node) then
-                local child_heading_level = 2
                 local sorted_children = vim.list_extend({}, node.child_order)
                 module.private.sort_strings(sorted_children)
 
@@ -659,12 +722,15 @@ module.private = {
                         local child = node.children[child_name]
                         local child_path_parts = vim.list_extend({}, path_parts)
                         table.insert(child_path_parts, child_name)
-                        local norgname = module.private.get_category_norgname(child_path_parts, child)
+                        local child_rel_path = module.private.get_category_rel_path(child_path_parts, child)
+                        local rel_norgname = module.private.get_relative_norgname(rel_path, child_rel_path)
                         table.insert(
                             lines,
-                            string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                            string.rep("*", child_heading_level) .. " {:" .. rel_norgname .. ":}[" .. child_name .. "]"
                         )
                     end
+                    -- Parent link as last subcategory heading
+                    table.insert(lines, parent_link_line)
 
                     -- "Notes" heading with all entries (direct + descendants) flattened
                     local all_entries = module.private.deduplicate_entries(module.private.collect_all_entries(node))
@@ -680,10 +746,11 @@ module.private = {
                         local child = node.children[child_name]
                         local child_path_parts = vim.list_extend({}, path_parts)
                         table.insert(child_path_parts, child_name)
-                        local norgname = module.private.get_category_norgname(child_path_parts, child)
+                        local child_rel_path = module.private.get_category_rel_path(child_path_parts, child)
+                        local rel_norgname = module.private.get_relative_norgname(rel_path, child_rel_path)
                         table.insert(
                             heading_lines,
-                            string.rep("*", child_heading_level) .. " {:$" .. norgname .. ":}[" .. child_name .. "]"
+                            string.rep("*", child_heading_level) .. " {:" .. rel_norgname .. ":}[" .. child_name .. "]"
                         )
                     end
 
@@ -694,33 +761,17 @@ module.private = {
 
                     vim.list_extend(lines, entry_lines)
                     vim.list_extend(lines, heading_lines)
+                    -- Parent link as last heading
+                    table.insert(lines, parent_link_line)
                 end
             else
                 -- Leaf node: list direct entries, sorted and deduplicated
                 local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                 module.private.sort_entries(entries)
                 vim.list_extend(lines, module.private.format_entry_lines(entries, heading_level + 1))
+                -- Parent link as last item
+                table.insert(lines, parent_link_line)
             end
-
-            -- Add a heading linking to the parent (one level up)
-            local parent_norgname, parent_name
-            if #path_parts == 1 then
-                -- Top-level category: parent is the main index file
-                parent_norgname = "/" .. config.name:gsub("%.norg$", "")
-                parent_name = config.name:gsub("%.norg$", "")
-            else
-                -- Sub-category: parent is the parent category file
-                local parent_path_parts = {}
-                for i = 1, #path_parts - 1 do
-                    table.insert(parent_path_parts, path_parts[i])
-                end
-                parent_norgname = module.private.get_category_norgname(parent_path_parts, nil)
-                parent_name = path_parts[#path_parts - 1]
-            end
-            vim.list_extend(lines, {
-                "",
-                string.rep("*", heading_level) .. " {:$" .. parent_norgname .. ":}[󰜱  " .. parent_name .. "]",
-            })
 
             files[rel_path] = table.concat(lines, "\n") .. "\n"
 
