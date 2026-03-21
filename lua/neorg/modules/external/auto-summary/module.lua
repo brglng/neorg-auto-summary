@@ -180,9 +180,13 @@ module.public = {
             end
 
             -- Write all files asynchronously
+            local written_paths = {}
+            for _, file_info in ipairs(files_to_write) do
+                table.insert(written_paths, file_info.path)
+            end
             module.private.write_files_async(files_to_write, function()
                 vim.schedule(function()
-                    vim.cmd("checktime")
+                    module.private.reopen_file_buffers(written_paths)
                     utils.notify("Summary generated at " .. summary_path)
                 end)
             end)
@@ -209,7 +213,7 @@ module.public = {
                     if err then
                         utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
                     else
-                        vim.cmd("checktime")
+                        module.private.reopen_file_buffers({ summary_path })
                         utils.notify("Summary generated at " .. summary_path)
                     end
                 end)
@@ -245,6 +249,34 @@ module.private = {
             vim.lsp.buf_detach_client(bufnr, client.id)
         end
         vim.api.nvim_buf_delete(bufnr, { force = true })
+    end,
+
+    --- Close and re-open buffers for the given file paths.
+    --- If a buffer was displayed in a window, the window is updated to show the
+    --- newly opened buffer so the user sees the refreshed content.
+    --- @param paths string[] list of absolute file paths that were written
+    reopen_file_buffers = function(paths)
+        for _, path in ipairs(paths) do
+            local old_bufnr = vim.fn.bufnr(path)
+            if old_bufnr ~= -1 and vim.api.nvim_buf_is_valid(old_bufnr) then
+                -- Remember which windows were displaying this buffer
+                local win_ids = vim.fn.win_findbuf(old_bufnr)
+
+                -- Close the old buffer
+                module.private.safe_buf_delete(old_bufnr)
+
+                -- Re-open the file into a new buffer
+                local new_bufnr = vim.fn.bufadd(path)
+                vim.fn.bufload(new_bufnr)
+
+                -- Restore windows that were showing the old buffer
+                for _, win_id in ipairs(win_ids) do
+                    if vim.api.nvim_win_is_valid(win_id) then
+                        vim.api.nvim_win_set_buf(win_id, new_bufnr)
+                    end
+                end
+            end
+        end
     end,
 
     --- Read entire file contents using vim.uv (synchronous).
@@ -513,11 +545,15 @@ module.private = {
         return result
     end,
 
-    --- Sort a list of strings alphabetically (case-insensitive, always ascending).
-    --- Categories are always sorted alphabetically regardless of sort_by/sort_direction.
+    --- Sort a list of strings alphabetically (case-insensitive), respecting sort_direction.
     sort_strings = function(list)
+        local ascending = module.config.public.sort_direction == "ascending"
         table.sort(list, function(a, b)
-            return a:lower() < b:lower()
+            if ascending then
+                return a:lower() < b:lower()
+            else
+                return a:lower() > b:lower()
+            end
         end)
     end,
 
@@ -614,7 +650,7 @@ module.private = {
                     local all_entries = module.private.deduplicate_entries(module.private.collect_all_entries(node))
                     module.private.sort_entries(all_entries)
                     if #all_entries > 0 then
-                        vim.list_extend(lines, { "",  string.rep("*", heading_level) .. " Notes", "" })
+                        vim.list_extend(lines, { "", string.rep("*", heading_level) .. " Notes", "" })
                         vim.list_extend(lines, module.private.format_entry_lines(all_entries, heading_level + 1))
                     end
                 else
@@ -643,6 +679,9 @@ module.private = {
                 -- Leaf node: list direct entries, sorted and deduplicated
                 local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                 module.private.sort_entries(entries)
+                if config.list_subcategory_notes and #entries > 0 then
+                    vim.list_extend(lines, { "", string.rep("*", heading_level) .. " Notes", "" })
+                end
                 vim.list_extend(lines, module.private.format_entry_lines(entries, heading_level + 1))
             end
 
@@ -834,7 +873,6 @@ module.private = {
 
         return table.concat(metadata_lines, "\n") .. "\n\n" .. body
     end,
-
 
     --- Write a single file asynchronously.
     --- callback(err) is called on completion; err is nil on success.
