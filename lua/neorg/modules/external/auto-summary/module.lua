@@ -679,9 +679,6 @@ module.private = {
                 -- Leaf node: list direct entries, sorted and deduplicated
                 local entries = module.private.deduplicate_entries(vim.list_extend({}, node.entries))
                 module.private.sort_entries(entries)
-                if config.list_subcategory_notes and #entries > 0 then
-                    vim.list_extend(lines, { "", string.rep("*", heading_level) .. " Notes", "" })
-                end
                 vim.list_extend(lines, module.private.format_entry_lines(entries, heading_level + 1))
             end
 
