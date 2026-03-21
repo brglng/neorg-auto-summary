@@ -16,7 +16,6 @@ module.setup = function()
         requires = {
             "core.dirman",
             "core.esupports.metagen",
-            "core.integrations.treesitter",
         },
     }
 end
@@ -147,7 +146,6 @@ module.public = {
                 main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local main_metadata = module.private.read_existing_metadata(summary_path)
-                module.private.close_file_buffers(summary_path)
                 main_content = main_body
                 if main_metadata then
                     main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
@@ -183,6 +181,7 @@ module.public = {
             -- Write all files asynchronously
             module.private.write_files_async(files_to_write, function()
                 vim.schedule(function()
+                    vim.cmd("checktime")
                     utils.notify("Summary generated at " .. summary_path)
                 end)
             end)
@@ -197,7 +196,6 @@ module.public = {
                 content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
             else
                 local metadata = module.private.read_existing_metadata(summary_path)
-                module.private.close_file_buffers(summary_path)
                 content = main_body
                 if metadata then
                     content = table.concat(metadata, "\n") .. "\n\n" .. content
@@ -210,6 +208,7 @@ module.public = {
                     if err then
                         utils.notify("Failed to write summary file: " .. err, vim.log.levels.ERROR)
                     else
+                        vim.cmd("checktime")
                         utils.notify("Summary generated at " .. summary_path)
                     end
                 end)
@@ -247,6 +246,83 @@ module.private = {
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end,
 
+    --- Read entire file contents using vim.uv (synchronous).
+    --- @param path string absolute file path
+    --- @return string|nil file contents or nil on error
+    read_file_contents = function(path)
+        local stat = vim.uv.fs_stat(path)
+        if not stat then
+            return nil
+        end
+        local fd = vim.uv.fs_open(path, "r", 438)
+        if not fd then
+            return nil
+        end
+        local data = vim.uv.fs_read(fd, stat.size, 0)
+        vim.uv.fs_close(fd)
+        return data
+    end,
+
+    --- Parse @document.meta block from file content string.
+    --- Returns a key-value table similar to treesitter's get_document_metadata.
+    --- @param content string file content
+    --- @return table metadata key-value table
+    parse_metadata_from_content = function(content)
+        local metadata = {}
+        local in_meta = false
+        for line in content:gmatch("[^\n]*") do
+            if not in_meta then
+                if line:match("^@document%.meta%s*$") then
+                    in_meta = true
+                end
+            else
+                if line:match("^@end%s*$") then
+                    break
+                end
+                local key, value = line:match("^%s*(%S+):%s*(.*)")
+                if key then
+                    value = vim.trim(value)
+                    local array_content = value:match("^%[(.*)%]$")
+                    if array_content then
+                        local items = {}
+                        for item in array_content:gmatch("[^,]+") do
+                            item = vim.trim(item)
+                            if item ~= "" then
+                                table.insert(items, item)
+                            end
+                        end
+                        metadata[key] = items
+                    else
+                        metadata[key] = value
+                    end
+                end
+            end
+        end
+        return metadata
+    end,
+
+    --- Extract the raw @document.meta block lines from file content.
+    --- @param content string file content
+    --- @return string[]|nil metadata lines (including @document.meta and @end) or nil
+    extract_metadata_lines = function(content)
+        local lines = {}
+        local in_meta = false
+        for line in content:gmatch("[^\n]*") do
+            if not in_meta then
+                if line:match("^@document%.meta%s*$") then
+                    in_meta = true
+                    table.insert(lines, line)
+                end
+            else
+                table.insert(lines, line)
+                if line:match("^@end%s*$") then
+                    return lines
+                end
+            end
+        end
+        return nil
+    end,
+
     --- Collect entries from norg files, grouped by category.
     --- @param files string[] list of absolute file paths
     --- @param ws_norm string normalized workspace root
@@ -255,7 +331,6 @@ module.private = {
     --- @return table categorized map of full category string -> entries list
     --- @return string[] category_order ordered list of unique full category strings
     collect_entries = function(files, ws_norm, summary_path, cats_dir_abs)
-        local ts = module.required["core.integrations.treesitter"]
         local categorized = {}
         local category_order = {}
 
@@ -272,22 +347,14 @@ module.private = {
                 goto continue
             end
 
-            -- get_document_metadata requires a bufnr, so open a hidden buffer
-            local bufnr = vim.fn.bufnr(abs_path)
-            local created_buf = false
-            if bufnr == -1 then
-                bufnr = vim.fn.bufadd(abs_path)
-                created_buf = true
-            end
-            if not vim.api.nvim_buf_is_loaded(bufnr) then
-                vim.fn.bufload(bufnr)
+            -- Read file contents using vim.uv
+            local content = module.private.read_file_contents(abs_path)
+            if not content then
+                goto continue
             end
 
-            local metadata = ts.get_document_metadata(bufnr) or {}
-
-            if created_buf then
-                module.private.safe_buf_delete(bufnr)
-            end
+            -- Manually parse metadata from file content
+            local metadata = module.private.parse_metadata_from_content(content)
 
             -- Path relative to workspace root, without .norg extension, used in links.
             -- The leading "/" is intentional: combined with the "$" workspace anchor it
@@ -628,68 +695,22 @@ module.private = {
     --- Read existing @document.meta from a file (if it exists).
     --- @return string[]|nil metadata lines or nil
     read_existing_metadata = function(path)
-        local ts = module.required["core.integrations.treesitter"]
-
-        if vim.fn.filereadable(path) ~= 1 then
+        local content = module.private.read_file_contents(path)
+        if not content then
             return nil
         end
-
-        local bufnr = vim.fn.bufnr(path)
-        local created_buf = false
-        if bufnr == -1 then
-            bufnr = vim.fn.bufadd(path)
-            created_buf = true
-        end
-        if not vim.api.nvim_buf_is_loaded(bufnr) then
-            vim.fn.bufload(bufnr)
-        end
-
-        local query = utils.ts_parse_query(
-            "norg",
-            [[
-                (ranged_verbatim_tag
-                    (tag_name) @name
-                    (#eq? @name "document.meta")
-                ) @meta
-            ]]
-        )
-
-        local root = ts.get_document_root(bufnr)
-        local metadata = nil
-
-        if root then
-            local _, found = query:iter_matches(root, bufnr)()
-            if found then
-                for id, node in pairs(found) do
-                    local name = query.captures[id]
-                    -- node is a list in nvim 0.11+
-                    if vim.islist(node) then
-                        node = node[1]
-                    end
-                    if name == "meta" then
-                        local start_row, _, start_col, end_row, _, end_col = node:range(true)
-                        metadata = vim.api.nvim_buf_get_text(bufnr, start_row, start_col, end_row, end_col, {})
-                        break
-                    end
-                end
-            end
-        end
-
-        if created_buf then
-            module.private.safe_buf_delete(bufnr)
-        end
-
-        return metadata
+        return module.private.extract_metadata_lines(content)
     end,
 
     --- Read file body content (everything except the @document.meta block).
     --- @param path string absolute file path
     --- @return string|nil body content or nil if file doesn't exist
     read_file_body = function(path)
-        if vim.fn.filereadable(path) ~= 1 then
+        local content = module.private.read_file_contents(path)
+        if not content then
             return nil
         end
-        local lines = vim.fn.readfile(path)
+        local lines = vim.split(content, "\n", { plain = true })
         local in_meta = false
         local body_lines = {}
         local found_meta = false
@@ -786,7 +807,6 @@ module.private = {
     prepare_content_with_metadata = function(path, body, title)
         local old_metadata_lines = module.private.read_existing_metadata(path)
         local old_body = module.private.read_file_body(path)
-        module.private.close_file_buffers(path)
 
         local metadata_lines
         if old_metadata_lines then
@@ -805,17 +825,6 @@ module.private = {
         return table.concat(metadata_lines, "\n") .. "\n\n" .. body
     end,
 
-    --- Close all buffers associated with a file path.
-    close_file_buffers = function(path)
-        for _, b in ipairs(vim.api.nvim_list_bufs()) do
-            if vim.api.nvim_buf_is_valid(b) then
-                local buf_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(vim.api.nvim_buf_get_name(b))))
-                if buf_path == path then
-                    module.private.safe_buf_delete(b)
-                end
-            end
-        end
-    end,
 
     --- Write a single file asynchronously.
     --- callback(err) is called on completion; err is nil on success.
