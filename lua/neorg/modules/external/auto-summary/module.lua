@@ -543,10 +543,6 @@ module.private = {
         local rel = table.concat(result_parts, "/")
         rel = rel:gsub("%.norg$", "")
 
-        if not vim.startswith(rel, "..") then
-            rel = "./" .. rel
-        end
-
         return rel
     end,
 
