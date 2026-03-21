@@ -254,6 +254,7 @@ module.private = {
         if not stat then
             return nil
         end
+        -- 438 is octal 0666 (rw-rw-rw-), the standard permission for files
         local fd = vim.uv.fs_open(path, "r", 438)
         if not fd then
             return nil
@@ -270,7 +271,7 @@ module.private = {
     parse_metadata_from_content = function(content)
         local metadata = {}
         local in_meta = false
-        for line in content:gmatch("[^\n]*") do
+        for _, line in ipairs(vim.split(content, "\n", { plain = true })) do
             if not in_meta then
                 if line:match("^@document%.meta%s*$") then
                     in_meta = true
@@ -307,7 +308,7 @@ module.private = {
     extract_metadata_lines = function(content)
         local lines = {}
         local in_meta = false
-        for line in content:gmatch("[^\n]*") do
+        for _, line in ipairs(vim.split(content, "\n", { plain = true })) do
             if not in_meta then
                 if line:match("^@document%.meta%s*$") then
                     in_meta = true
