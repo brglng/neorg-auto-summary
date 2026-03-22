@@ -701,7 +701,7 @@ module.private = {
             local parent_link_line = string.rep("*", child_heading_level)
                 .. " {:"
                 .. parent_rel_norgname
-                .. ":}[󰜱  "
+                .. ":}[󰜱 "
                 .. parent_name
                 .. "]"
 
