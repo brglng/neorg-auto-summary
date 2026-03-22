@@ -553,9 +553,6 @@ module.private = {
         for _, entry in ipairs(entries) do
             local display_title = config.format_note_title(entry.metadata)
             local line = string.rep("*", heading_level) .. " {:$" .. entry.norgname .. ":}[" .. display_title .. "]"
-            if entry.description and entry.description ~= "" then
-                line = line .. " - " .. entry.description
-            end
             table.insert(lines, line)
         end
         return lines
