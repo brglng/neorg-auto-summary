@@ -33,10 +33,7 @@ module.load = function()
     if module.config.public.summary_on_launch then
         modules.await("core.dirman", function(dirman)
             vim.schedule(function()
-                local workspaces = dirman.get_workspaces()
-                for ws_name in pairs(workspaces) do
-                    module.public.auto_summary(ws_name)
-                end
+                module.public.auto_summary()
             end)
         end)
     end
@@ -106,16 +103,19 @@ module.public = {
 
         if not ws_name then
             ws_name = dirman.get_current_workspace()[1]
-            if ws_name == "default" then
-                -- Don't generate summary for non-registered workspace (default is cwd)
-                return 
-            end
+        end
+
+        if ws_name == "default" then
+            -- Don't generate summary for non-registered workspace (default is cwd)
+            return
         end
 
         local ws_root = dirman.get_workspace(ws_name)
         if not ws_root then
             return
         end
+
+        vim.notify("ws_name: " .. ws_name .. ", ws_root: " .. tostring(ws_root), vim.log.levels.INFO)
 
         local ws_norm = vim.fs.normalize(tostring(ws_root))
         local config = module.config.public
