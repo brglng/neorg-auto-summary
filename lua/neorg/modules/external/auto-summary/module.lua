@@ -106,13 +106,17 @@ module.public = {
 
         if not ws_name then
             ws_name = dirman.get_current_workspace()[1]
+            if ws_name == "default" then
+                -- Don't generate summary for non-registered workspace (default is cwd)
+                return 
+            end
         end
 
         local ws_root = dirman.get_workspace(ws_name)
         if not ws_root then
-            utils.notify("Workspace '" .. ws_name .. "' not found", vim.log.levels.ERROR)
             return
         end
+
         local ws_norm = vim.fs.normalize(tostring(ws_root))
         local config = module.config.public
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
@@ -243,7 +247,7 @@ module.private = {
         local dirman = module.required["core.dirman"]
         for _, name in ipairs(dirman.get_workspace_names()) do
             local root = vim.fs.normalize(tostring(dirman.get_workspace(name)))
-            if vim.startswith(filepath, root .. "/") or filepath == root then
+            if vim.startswith(filepath, root .. "/") then
                 return name
             end
         end
