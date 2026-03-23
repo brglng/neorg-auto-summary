@@ -115,8 +115,6 @@ module.public = {
             return
         end
 
-        vim.notify("ws_name: " .. ws_name .. ", ws_root: " .. tostring(ws_root), vim.log.levels.INFO)
-
         local ws_norm = vim.fs.normalize(tostring(ws_root))
         local config = module.config.public
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
