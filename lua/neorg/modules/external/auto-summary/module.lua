@@ -105,7 +105,7 @@ module.public = {
             ws_name = dirman.get_current_workspace()[1]
         end
 
-        if ws_name == "default" then
+        if not ws_name or ws_name == "default" then
             -- Don't generate summary for non-registered workspace (default is cwd)
             return
         end
