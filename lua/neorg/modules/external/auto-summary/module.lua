@@ -32,9 +32,7 @@ module.load = function()
     end)
     if module.config.public.summary_on_launch then
         modules.await("core.dirman", function(dirman)
-            vim.schedule(function()
-                module.public.auto_summary()
-            end)
+            module.private.trigger_summary_on_launch(dirman)
         end)
     end
     if module.config.public.update_on_change then
@@ -288,6 +286,30 @@ module.private = {
     workspace_watchers = {},
     watch_timers = {},
     pending_changes = {},
+    summary_on_launch_pending = false,
+
+    --- Attempt to run summary_on_launch once a real workspace is available.
+    --- @param dirman table|nil
+    --- @return boolean triggered true when a summary was scheduled
+    trigger_summary_on_launch = function(dirman)
+        if not module.config.public.summary_on_launch then
+            return false
+        end
+        dirman = dirman or module.required["core.dirman"]
+        if not dirman then
+            return false
+        end
+        local ws_name = dirman.get_current_workspace()[1]
+        if not ws_name or ws_name == "default" then
+            module.private.summary_on_launch_pending = true
+            return false
+        end
+        module.private.summary_on_launch_pending = false
+        vim.schedule(function()
+            module.public.auto_summary(ws_name)
+        end)
+        return true
+    end,
 
     --- Find the workspace that contains the given file path.
     --- @param filepath string normalized absolute file path
@@ -1311,16 +1333,29 @@ module.on_event = function(event)
         vim.schedule(function()
             module.public.auto_summary()
         end)
-    elseif module.config.public.update_on_change then
-        if event.type == "core.dirman.events.workspace_changed" then
+        return
+    end
+
+    if event.type == "core.dirman.events.workspace_changed" then
+        local handled_summary_on_launch = false
+        if module.private.summary_on_launch_pending then
+            handled_summary_on_launch = module.private.trigger_summary_on_launch()
+        end
+
+        if module.config.public.update_on_change then
             vim.schedule(function()
                 module.private.setup_workspace_watchers()
                 local new_ws = event.content and event.content.new
-                if new_ws then
+                if new_ws and not handled_summary_on_launch then
                     module.public.auto_summary(new_ws)
                 end
             end)
-        elseif event.type == "core.dirman.events.file_created" then
+        end
+        return
+    end
+
+    if module.config.public.update_on_change then
+        if event.type == "core.dirman.events.file_created" then
             vim.schedule(function()
                 local bufnr = event.content and event.content.buffer
                 if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
