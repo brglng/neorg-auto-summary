@@ -38,32 +38,7 @@ module.load = function()
         end)
     end
     if module.config.public.update_on_change then
-        vim.api.nvim_create_autocmd("BufWritePost", {
-            pattern = "*.norg",
-            callback = function(e)
-                local filename = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(e.file)))
-                local ws_name = module.private.find_workspace_for_file(filename)
-                if not ws_name then
-                    return
-                end
-
-                local dirman = module.required["core.dirman"]
-                local ws_root = vim.fs.normalize(tostring(dirman.get_workspace(ws_name)))
-
-                local summary_name = vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. module.config.public.name))
-                if filename == summary_name then
-                    return
-                end
-                if module.config.public.per_category_summary then
-                    local cats_dir =
-                        vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. module.config.public.categories_dir))
-                    if vim.startswith(filename, cats_dir .. "/") then
-                        return
-                    end
-                end
-                module.public.auto_summary(ws_name)
-            end,
-        })
+        module.private.setup_workspace_watchers()
     end
 end
 
@@ -71,6 +46,7 @@ module.config.public = {
     name = "index.norg",
     summary_on_launch = false,
     update_on_change = false,
+    watch_debounce_ms = 200,
     category_separator = ".",
     per_category_summary = true,
     categories_dir = "categories",
@@ -89,7 +65,8 @@ module.config.public = {
 module.public = {
     --- Generate the auto-summary for a workspace.
     --- @param ws_name string|nil workspace name; defaults to the current workspace
-    auto_summary = function(ws_name)
+    --- @param opts table|nil options: { changed_files = string[] }
+    auto_summary = function(ws_name, opts)
         local dirman = modules.get_module("core.dirman")
 
         if not dirman then
@@ -119,42 +96,108 @@ module.public = {
         local config = module.config.public
         local summary_path = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(ws_norm .. "/" .. config.name)))
 
+        opts = opts or {}
+        local changed_set = nil
+        if type(opts.changed_files) == "table" then
+            changed_set = {}
+            for _, path in ipairs(opts.changed_files) do
+                local normalized = vim.fs.normalize(vim.fs.abspath(vim.fn.resolve(path)))
+                changed_set[normalized] = true
+            end
+            if not next(changed_set) then
+                changed_set = nil
+            end
+        end
+
         local cats_dir_abs = nil
         if config.per_category_summary then
             cats_dir_abs = vim.fs.normalize(vim.fn.resolve(ws_norm .. "/" .. config.categories_dir))
         end
 
         -- Collect entries from all norg files
-        local categorized, category_order =
-            module.private.collect_entries(dirman.get_norg_files(ws_name) or {}, ws_norm, summary_path, cats_dir_abs)
+        local categorized, category_order, affected_categories = module.private.collect_entries(
+            dirman.get_norg_files(ws_name) or {},
+            ws_norm,
+            summary_path,
+            cats_dir_abs,
+            changed_set
+        )
+
+        if changed_set and config.per_category_summary and cats_dir_abs then
+            local changed_norgnames = {}
+            for path in pairs(changed_set) do
+                if path ~= summary_path
+                    and path:match("%.norg$")
+                    and not (cats_dir_abs and vim.startswith(path, cats_dir_abs .. "/")) then
+                    if vim.startswith(path, ws_norm .. "/") then
+                        local norgname = path:gsub("^" .. vim.pesc(ws_norm), ""):gsub("%.norg$", "")
+                        table.insert(changed_norgnames, norgname)
+                    end
+                end
+            end
+            if #changed_norgnames > 0 then
+                local old_categories =
+                    module.private.find_categories_for_norgnames(ws_norm, cats_dir_abs, changed_norgnames)
+                for cat in pairs(old_categories) do
+                    affected_categories[cat] = true
+                    local parts = vim.split(cat, config.category_separator, { plain = true })
+                    parts = vim.tbl_filter(function(p)
+                        return p ~= ""
+                    end, parts)
+                    if #parts > 1 then
+                        local acc = {}
+                        for _, part in ipairs(parts) do
+                            table.insert(acc, part)
+                            affected_categories[table.concat(acc, config.category_separator)] = true
+                        end
+                    end
+                end
+            end
+        end
+
+        local partial_update = changed_set ~= nil and next(affected_categories) ~= nil
 
         -- Build category tree
         local tree = module.private.build_category_tree(categorized, category_order, config.category_separator)
 
+        local write_main = true
+        if config.per_category_summary and not config.list_subcategory_notes and partial_update then
+            write_main = module.private.top_level_categories_changed(cats_dir_abs, tree.child_order)
+        end
+
         if config.per_category_summary then
             -- Generate main summary with links to category files
-            local main_lines = module.private.generate_main_summary_with_files(tree)
+            local main_lines
+            if write_main then
+                main_lines = module.private.generate_main_summary_with_files(tree)
+            end
 
             -- Generate all category file contents (relative paths -> body content)
-            local category_files = module.private.generate_all_category_files(tree)
+            local category_files =
+                module.private.generate_all_category_files(tree, partial_update and affected_categories or nil)
 
-            local main_body = table.concat(main_lines, "\n") .. "\n"
+            local main_body
+            if write_main then
+                main_body = table.concat(main_lines, "\n") .. "\n"
+            end
 
             -- Prepare content with metadata handling (BEFORE deleting categories dir)
             local files_to_write = {}
 
             -- Main summary
-            local main_content
-            if config.inject_metadata then
-                main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
-            else
-                local main_metadata = module.private.read_existing_metadata(summary_path)
-                main_content = main_body
-                if main_metadata then
-                    main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
+            if write_main then
+                local main_content
+                if config.inject_metadata then
+                    main_content = module.private.prepare_content_with_metadata(summary_path, main_body, "Index")
+                else
+                    local main_metadata = module.private.read_existing_metadata(summary_path)
+                    main_content = main_body
+                    if main_metadata then
+                        main_content = table.concat(main_metadata, "\n") .. "\n\n" .. main_content
+                    end
                 end
+                table.insert(files_to_write, { path = summary_path, content = main_content })
             end
-            table.insert(files_to_write, { path = summary_path, content = main_content })
 
             -- Category files (read old data BEFORE directory deletion)
             local category_contents = {}
@@ -169,9 +212,13 @@ module.public = {
                 end
             end
 
-            -- Now safe to delete categories directory
-            if cats_dir_abs and vim.fn.isdirectory(cats_dir_abs) == 1 then
-                vim.fn.delete(cats_dir_abs, "rf")
+            -- Now safe to delete categories directory for full rebuilds only
+            if not partial_update then
+                if cats_dir_abs and vim.fn.isdirectory(cats_dir_abs) == 1 then
+                    vim.fn.delete(cats_dir_abs, "rf")
+                end
+            elseif affected_categories and next(affected_categories) ~= nil then
+                module.private.delete_obsolete_category_files(ws_norm, tree, affected_categories, config.category_separator)
             end
 
             -- Create directories and prepare file entries
@@ -238,6 +285,10 @@ module.public = {
 }
 
 module.private = {
+    workspace_watchers = {},
+    watch_timers = {},
+    pending_changes = {},
+
     --- Find the workspace that contains the given file path.
     --- @param filepath string normalized absolute file path
     --- @return string|nil workspace name or nil if not found
@@ -252,7 +303,100 @@ module.private = {
         return nil
     end,
 
-    --- Safely delete a buffer by detaching LSP clients first to avoid errors.
+    --- Determine whether a path should be ignored for watcher-triggered updates.
+    --- @param filename string normalized absolute file path
+    --- @param ws_root string normalized workspace root
+    --- @return boolean
+    should_ignore_path = function(filename, ws_root)
+        local config = module.config.public
+        local summary_name = vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. config.name))
+        if filename == summary_name then
+            return true
+        end
+        if config.per_category_summary then
+            local cats_dir = vim.fs.normalize(vim.fn.resolve(ws_root .. "/" .. config.categories_dir))
+            if vim.startswith(filename, cats_dir .. "/") then
+                return true
+            end
+        end
+        return false
+    end,
+
+    --- Debounce auto-summary generation per workspace.
+    --- @param ws_name string
+    --- @param filename string|nil normalized absolute file path to track
+    debounce_workspace_update = function(ws_name, filename)
+        local config = module.config.public
+        local timers = module.private.watch_timers
+        local pending = module.private.pending_changes
+        if filename then
+            pending[ws_name] = pending[ws_name] or {}
+            pending[ws_name][filename] = true
+        end
+        local timer = timers[ws_name]
+        if not timer then
+            timer = vim.uv.new_timer()
+            if not timer then
+                return
+            end
+            timers[ws_name] = timer
+        else
+            timer:stop()
+        end
+        timer:start(config.watch_debounce_ms, 0, function()
+            timer:stop()
+            local changed = pending[ws_name]
+            pending[ws_name] = nil
+            local changed_list = nil
+            if changed then
+                changed_list = vim.tbl_keys(changed)
+            end
+            vim.schedule(function()
+                module.public.auto_summary(ws_name, { changed_files = changed_list })
+            end)
+        end)
+    end,
+
+    --- Setup filesystem watchers for all workspaces to track .norg changes.
+    setup_workspace_watchers = function()
+        local dirman = module.required["core.dirman"]
+        if not dirman then
+            return
+        end
+
+        for _, name in ipairs(dirman.get_workspace_names()) do
+            local root = dirman.get_workspace(name)
+            if root then
+                local ws_root = vim.fs.normalize(tostring(root))
+                if not module.private.workspace_watchers[name] then
+                    local watcher = vim.uv.new_fs_event()
+                    if watcher then
+                        watcher:start(ws_root, { recursive = true }, function(err, filename, _events)
+                            if err then
+                                vim.schedule(function()
+                                    utils.notify("Watcher error for " .. ws_root .. ": " .. err, vim.log.levels.ERROR)
+                                end)
+                                return
+                            end
+                            if not filename or filename == "" then
+                                return
+                            end
+                            local abs_path = vim.fs.normalize(vim.fs.abspath(ws_root .. "/" .. filename))
+                            if not abs_path:match("%.norg$") then
+                                return
+                            end
+                            if module.private.should_ignore_path(abs_path, ws_root) then
+                                return
+                            end
+                            module.private.debounce_workspace_update(name, abs_path)
+                        end)
+                        module.private.workspace_watchers[name] = { watcher = watcher, root = ws_root }
+                    end
+                end
+            end
+        end
+    end,
+
     --- @param bufnr number buffer number to delete
     safe_buf_delete = function(bufnr)
         if not vim.api.nvim_buf_is_valid(bufnr) then
@@ -356,12 +500,17 @@ module.private = {
     --- @param ws_norm string normalized workspace root
     --- @param summary_path string absolute path of the main summary file to skip
     --- @param cats_dir_abs string|nil absolute path of the categories directory to skip
+    --- @param changed_set table|nil map of normalized absolute file paths that changed
     --- @return table categorized map of full category string -> entries list
     --- @return string[] category_order ordered list of unique full category strings
-    collect_entries = function(files, ws_norm, summary_path, cats_dir_abs)
+    --- @return table affected_categories map of full category strings affected by changed files
+    collect_entries = function(files, ws_norm, summary_path, cats_dir_abs, changed_set)
         local ts = module.required["core.integrations.treesitter"]
         local categorized = {}
         local category_order = {}
+        local affected_categories = {}
+        local config = module.config.public
+        local separator = config.category_separator
 
         for _, file in ipairs(files) do
             local abs_path = vim.fs.normalize(tostring(file))
@@ -418,6 +567,23 @@ module.private = {
                 cats = { tostring(cats) }
             end
 
+            if changed_set and changed_set[abs_path] then
+                for _, cat in ipairs(cats) do
+                    affected_categories[cat] = true
+                    local parts = vim.split(cat, separator, { plain = true })
+                    parts = vim.tbl_filter(function(p)
+                        return p ~= ""
+                    end, parts)
+                    if #parts > 1 then
+                        local acc = {}
+                        for _, part in ipairs(parts) do
+                            table.insert(acc, part)
+                            affected_categories[table.concat(acc, separator)] = true
+                        end
+                    end
+                end
+            end
+
             local entry = {
                 title = title,
                 norgname = norgname,
@@ -438,7 +604,11 @@ module.private = {
             ::continue::
         end
 
-        return categorized, category_order
+        if changed_set and not next(affected_categories) then
+            affected_categories = {}
+        end
+
+        return categorized, category_order, affected_categories
     end,
 
     --- Build a category tree from flat categorized entries.
@@ -475,6 +645,125 @@ module.private = {
         end
 
         return tree
+    end,
+
+    --- Check whether top-level categories have changed compared to existing category files.
+    --- @param cats_dir_abs string|nil
+    --- @param top_level string[]
+    --- @return boolean
+    top_level_categories_changed = function(cats_dir_abs, top_level)
+        if not cats_dir_abs or vim.fn.isdirectory(cats_dir_abs) ~= 1 then
+            return true
+        end
+        local existing = {}
+        for name, entry_type in vim.fs.dir(cats_dir_abs) do
+            if entry_type == "file" and name:sub(-5) == ".norg" then
+                table.insert(existing, name:sub(1, -6))
+            end
+        end
+        local desired = vim.list_extend({}, top_level)
+        module.private.sort_strings(existing)
+        module.private.sort_strings(desired)
+        if #existing ~= #desired then
+            return true
+        end
+        for i = 1, #existing do
+            if existing[i] ~= desired[i] then
+                return true
+            end
+        end
+        return false
+    end,
+
+    --- Check whether a full category exists in the tree.
+    --- @param tree table
+    --- @param full_cat string
+    --- @param separator string
+    --- @return boolean
+    category_exists = function(tree, full_cat, separator)
+        local parts = vim.split(full_cat, separator, { plain = true })
+        parts = vim.tbl_filter(function(p)
+            return p ~= ""
+        end, parts)
+        if #parts == 0 then
+            return false
+        end
+        local node = tree
+        for _, part in ipairs(parts) do
+            if not node.children[part] then
+                return false
+            end
+            node = node.children[part]
+        end
+        return true
+    end,
+
+    --- Convert a full category string to its relative category file path.
+    --- @param full_cat string
+    --- @param separator string
+    --- @return string
+    get_category_rel_path_from_string = function(full_cat, separator)
+        local parts = vim.split(full_cat, separator, { plain = true })
+        parts = vim.tbl_filter(function(p)
+            return p ~= ""
+        end, parts)
+        if #parts == 0 then
+            parts = { full_cat }
+        end
+        return module.private.get_category_rel_path(parts, nil)
+    end,
+
+    --- Find categories whose summary files currently reference any of the given note norgnames.
+    --- @param ws_norm string
+    --- @param cats_dir_abs string
+    --- @param norgnames string[]
+    --- @return table map of full category strings -> true
+    find_categories_for_norgnames = function(ws_norm, cats_dir_abs, norgnames)
+        local config = module.config.public
+        local results = {}
+        if not cats_dir_abs or #norgnames == 0 then
+            return results
+        end
+        if vim.fn.isdirectory(cats_dir_abs) ~= 1 then
+            return results
+        end
+        local files = vim.fs.find(function(name, _path)
+            return name:sub(-5) == ".norg"
+        end, { path = cats_dir_abs, type = "file", limit = math.huge })
+        for _, abs_path in ipairs(files) do
+            local content = module.private.read_file_contents(abs_path)
+            if content then
+                for _, norgname in ipairs(norgnames) do
+                    if content:find("{:$" .. norgname .. ":}", 1, true) then
+                        local rel_path = abs_path:gsub("^" .. vim.pesc(ws_norm .. "/"), "")
+                        local cat_path = rel_path
+                            :gsub("^" .. vim.pesc(config.categories_dir .. "/"), "")
+                            :gsub("%.norg$", "")
+                        local full_cat = cat_path:gsub("/", config.category_separator)
+                        results[full_cat] = true
+                        break
+                    end
+                end
+            end
+        end
+        return results
+    end,
+
+    --- Delete category files that no longer exist in the tree.
+    --- @param ws_norm string
+    --- @param tree table
+    --- @param affected_categories table map of full category strings
+    --- @param separator string
+    delete_obsolete_category_files = function(ws_norm, tree, affected_categories, separator)
+        for full_cat in pairs(affected_categories) do
+            if not module.private.category_exists(tree, full_cat, separator) then
+                local rel_path = module.private.get_category_rel_path_from_string(full_cat, separator)
+                local abs_path = vim.fs.normalize(ws_norm .. "/" .. rel_path)
+                if vim.fn.filereadable(abs_path) == 1 then
+                    vim.fn.delete(abs_path)
+                end
+            end
+        end
     end,
 
     --- Recursively collect all entries from a node and its descendants.
@@ -673,12 +962,15 @@ module.private = {
     end,
 
     --- Generate all category file contents.
+    --- @param affected_categories table|nil map of full category strings to include
     --- @return table map of relative_path -> content_string
-    generate_all_category_files = function(tree)
+    generate_all_category_files = function(tree, affected_categories)
         local config = module.config.public
         local files = {}
+        local separator = config.category_separator
 
         local function generate_node(node, node_name, path_parts)
+            local full_cat = table.concat(path_parts, separator)
             local rel_path = module.private.get_category_rel_path(path_parts, node)
             local heading_level = 1
             local child_heading_level = heading_level + 1
@@ -768,7 +1060,11 @@ module.private = {
                 table.insert(lines, parent_link_line)
             end
 
-            files[rel_path] = table.concat(lines, "\n") .. "\n"
+            local content = table.concat(lines, "\n") .. "\n"
+
+            if not affected_categories or affected_categories[full_cat] then
+                files[rel_path] = content
+            end
 
             -- Recurse into children
             for _, child_name in ipairs(node.child_order) do
@@ -1018,6 +1314,7 @@ module.on_event = function(event)
     elseif module.config.public.update_on_change then
         if event.type == "core.dirman.events.workspace_changed" then
             vim.schedule(function()
+                module.private.setup_workspace_watchers()
                 local new_ws = event.content and event.content.new
                 if new_ws then
                     module.public.auto_summary(new_ws)
